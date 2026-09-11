@@ -12,6 +12,7 @@ SQLite.
 - Start a workout by choosing a gym and template.
 - See the machine settings and the weight/reps used during the previous session at that gym.
 - Record sets, finish sessions, and browse recent workout history.
+- Switch between the original light theme and a charcoal dark theme with orange-red accents.
 
 ## Run locally
 
@@ -27,6 +28,9 @@ python app.py
 NiceGUI prints the local address in the terminal (normally `http://localhost:8080`). The app
 creates `data/workout_tracker.db` on first launch. That database is intentionally ignored by
 Git so personal workout data stays local.
+
+The selected color theme is remembered in the browser. For a shared or deployed installation,
+set `WORKOUT_TRACKER_STORAGE_SECRET` to a private random value before starting the app.
 
 ## Project structure
 

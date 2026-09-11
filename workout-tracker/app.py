@@ -1,20 +1,162 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from typing import Callable
 
-from nicegui import ui
+from nicegui import app, ui
 
 import database as db
 
 
 db.initialize_database()
 
+ui.add_head_html(
+    """
+    <style>
+        :root {
+            --app-radius: 18px;
+            --app-control-radius: 12px;
+        }
+
+        body,
+        .q-layout,
+        .q-page-container {
+            transition: background-color 180ms ease, color 180ms ease;
+        }
+
+        .app-header {
+            box-shadow: 0 1px 0 rgba(15, 23, 42, 0.12), 0 8px 24px rgba(15, 23, 42, 0.08);
+            backdrop-filter: blur(14px);
+        }
+
+        .q-card {
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: var(--app-radius) !important;
+            box-shadow: 0 8px 28px rgba(15, 23, 42, 0.07) !important;
+            transition: background-color 180ms ease, border-color 180ms ease,
+                        box-shadow 180ms ease, transform 180ms ease;
+        }
+
+        .q-card:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 34px rgba(15, 23, 42, 0.10) !important;
+        }
+
+        .q-btn {
+            border-radius: var(--app-control-radius) !important;
+            letter-spacing: 0.01em;
+        }
+
+        .q-btn--round {
+            border-radius: 50% !important;
+        }
+
+        .q-field--outlined .q-field__control,
+        .q-field--filled .q-field__control,
+        .q-field--standard .q-field__control {
+            border-radius: var(--app-control-radius) !important;
+        }
+
+        .q-menu,
+        .q-notification {
+            border-radius: var(--app-control-radius) !important;
+        }
+
+        body.body--dark,
+        .body--dark .q-layout,
+        .body--dark .q-page-container {
+            background: #0b0b0d !important;
+            color: #f4f4f5;
+        }
+
+        .body--dark .app-header {
+            background: rgba(17, 17, 19, 0.96) !important;
+            border-bottom: 1px solid #2a2a2e;
+            box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+        }
+
+        .body--dark .q-card {
+            background: #171719 !important;
+            border-color: #2c2c31;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28) !important;
+        }
+
+        .body--dark .q-card:hover {
+            border-color: #3a3a40;
+            box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38) !important;
+        }
+
+        .body--dark .q-field__control {
+            background: #121214;
+        }
+
+        .body--dark .q-field__native,
+        .body--dark .q-field__input,
+        .body--dark .q-field__label {
+            color: #eeeeef;
+        }
+
+        .body--dark .q-field__control::before {
+            border-color: #3a3a40 !important;
+        }
+
+        .body--dark .q-field--focused .q-field__control::after {
+            border-color: #f0643f !important;
+        }
+
+        .body--dark .q-btn.bg-primary {
+            background: linear-gradient(135deg, #ef5b38, #d9482b) !important;
+            box-shadow: 0 6px 18px rgba(239, 91, 56, 0.20);
+        }
+
+        .body--dark .q-btn.text-primary {
+            color: #ff7654 !important;
+        }
+
+        .body--dark .text-grey-7,
+        .body--dark .text-grey-6 {
+            color: #a7a7ae !important;
+        }
+
+        .body--dark .text-orange-8 {
+            color: #ff8a5f !important;
+        }
+
+        .body--dark .border-grey-3 {
+            border-color: #303035 !important;
+        }
+
+        .body--dark .q-separator {
+            background: #303035;
+        }
+
+        @media (max-width: 760px) {
+            .app-header {
+                gap: 0.15rem;
+                overflow-x: auto;
+                flex-wrap: nowrap;
+            }
+
+            .app-header .q-btn {
+                padding-left: 0.55rem;
+                padding-right: 0.55rem;
+            }
+        }
+    </style>
+    """
+)
+
 
 def navigation() -> None:
-    with ui.header().classes("items-center"):
-        ui.label("Workout Tracker").classes("text-h6")
+    app.storage.user.setdefault("dark_mode", False)
+    dark_mode = ui.dark_mode(app.storage.user["dark_mode"]).bind_value(
+        app.storage.user, "dark_mode"
+    )
+    with ui.header().classes("app-header items-center"):
+        ui.icon("fitness_center", size="sm")
+        ui.label("Workout Tracker").classes("text-h6 whitespace-nowrap")
         ui.space()
         for label, target in (
             ("Today", "/"),
@@ -25,6 +167,9 @@ def navigation() -> None:
             ("History", "/history"),
         ):
             ui.button(label, on_click=lambda path=target: ui.navigate.to(path)).props("flat color=white")
+        ui.button(icon="contrast", on_click=dark_mode.toggle).props(
+            "flat round color=white aria-label='Toggle dark mode'"
+        ).tooltip("Toggle light/dark mode")
 
 
 def page_title(title: str, subtitle: str = "") -> None:
@@ -423,4 +568,11 @@ def history_page() -> None:
                     ).props("flat")
 
 
-ui.run(title="Workout Tracker", favicon="🏋️", reload=False)
+ui.run(
+    title="Workout Tracker",
+    favicon="🏋️",
+    reload=False,
+    storage_secret=os.environ.get(
+        "WORKOUT_TRACKER_STORAGE_SECRET", "workout-tracker-local-development"
+    ),
+)
