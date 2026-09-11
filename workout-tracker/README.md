@@ -66,3 +66,23 @@ database module, making the SQL visible and easy to learn.
 
 Templates are independent from gyms. This means one Push A template can be used everywhere,
 while the machine settings shown during the workout change with the selected gym.
+
+## Deploy on Render
+
+The repository includes a root-level `render.yaml` Blueprint. In Render, create a new Blueprint,
+connect the `Personal-Projects` repository, and approve the proposed `workout-tracker` service.
+Render will build and start the app from this subdirectory automatically.
+
+The Blueprint provisions a small persistent disk and stores SQLite at
+`/var/data/workout_tracker.db`. A persistent disk requires a paid Render web service; without
+one, Render's ephemeral filesystem would erase workout data during redeploys and restarts.
+
+The deployed service uses these environment variables:
+
+- `PORT`: provided automatically by Render and used by NiceGUI.
+- `WORKOUT_TRACKER_STORAGE_SECRET`: generated automatically by the Blueprint.
+- `WORKOUT_TRACKER_DATABASE_PATH`: points SQLite at the persistent disk.
+
+The app is intentionally still a single-process SQLite learning project. Do not scale it to
+multiple service instances. It also has no login screen, so anyone with the public Render URL can
+use and change its data.

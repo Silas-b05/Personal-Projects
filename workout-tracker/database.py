@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -8,7 +9,9 @@ from typing import Any, Iterable
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DATABASE_PATH = DATA_DIR / "workout_tracker.db"
+DATABASE_PATH = Path(
+    os.environ.get("WORKOUT_TRACKER_DATABASE_PATH", str(DATA_DIR / "workout_tracker.db"))
+)
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 
 
