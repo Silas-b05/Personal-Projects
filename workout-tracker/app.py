@@ -14,6 +14,14 @@ db.initialize_database()
 
 ui.add_head_html(
     """
+    <script>
+        (() => {
+            const key = 'workout-tracker-dark-mode';
+            const isDark = localStorage.getItem(key) === 'true';
+            document.documentElement.classList.toggle('workout-dark-bootstrap', isDark);
+            document.documentElement.style.backgroundColor = isDark ? '#0b0b0d' : '';
+        })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -41,6 +49,20 @@ ui.add_head_html(
         .nicegui-content {
             max-width: 100%;
             overflow-x: hidden;
+        }
+
+        html.workout-dark-bootstrap,
+        html.workout-dark-bootstrap body,
+        html.workout-dark-bootstrap #q-app,
+        html.workout-dark-bootstrap .q-layout,
+        html.workout-dark-bootstrap .q-page-container,
+        html.workout-dark-bootstrap .nicegui-content {
+            background-color: #0b0b0d !important;
+            color-scheme: dark;
+        }
+
+        html.workout-dark-bootstrap .q-card {
+            background-color: #171719 !important;
         }
 
         .page-shell,
@@ -346,6 +368,25 @@ def navigation() -> None:
     dark_mode = ui.dark_mode(app.storage.user["dark_mode"]).bind_value(
         app.storage.user, "dark_mode"
     )
+
+    def sync_browser_theme() -> None:
+        is_dark = "true" if dark_mode.value else "false"
+        ui.run_javascript(
+            f"""
+            localStorage.setItem('workout-tracker-dark-mode', '{is_dark}');
+            document.documentElement.classList.toggle(
+                'workout-dark-bootstrap', {is_dark}
+            );
+            document.documentElement.style.backgroundColor =
+                {is_dark} ? '#0b0b0d' : '';
+            """
+        )
+
+    def toggle_theme() -> None:
+        dark_mode.toggle()
+        sync_browser_theme()
+
+    sync_browser_theme()
     navigation_items = (
         ("Today", "/", "fitness_center"),
         ("Gyms", "/gyms", "location_on"),
@@ -363,7 +404,7 @@ def navigation() -> None:
                 ui.button(label, on_click=lambda path=target: ui.navigate.to(path)).props(
                     "flat color=white"
                 )
-        ui.button(icon="contrast", on_click=dark_mode.toggle).props(
+        ui.button(icon="contrast", on_click=toggle_theme).props(
             "flat round color=white aria-label='Toggle dark mode'"
         ).tooltip("Toggle light/dark mode")
     with ui.row().classes("mobile-bottom-nav"):
