@@ -218,7 +218,7 @@ def templates_page() -> None:
                     ui.label("Add exercises before filling this template.").classes("text-orange-8")
                     continue
                 exercise = ui.select(options(exercises), label="Exercise").classes("w-64")
-                target_sets = ui.number("Sets", value=3, min=1, precision=0).classes("w-28")
+                target_sets = ui.number("Sets", value=3, min=1, step=1).classes("w-28")
                 target_reps = ui.input("Target reps", value="8-12").classes("w-32")
 
                 def add_item(
@@ -362,7 +362,7 @@ def session_page(session_id: int) -> None:
                             "Reps",
                             value=saved["reps"] if saved else (previous["reps"] if previous else None),
                             min=0,
-                            precision=0,
+                            step=1,
                         ).classes("w-32")
                         set_inputs.append((set_number, weight, reps))
 
