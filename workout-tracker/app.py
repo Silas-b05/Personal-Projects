@@ -67,6 +67,7 @@ ui.add_head_html(
         body.body--dark,
         .body--dark .q-layout,
         .body--dark .q-page-container {
+            --q-primary: #3f9e68;
             background: #0b0b0d !important;
             color: #f4f4f5;
         }
@@ -106,13 +107,13 @@ ui.add_head_html(
             border-color: #f0643f !important;
         }
 
-        .body--dark .q-btn.bg-primary {
-            background: linear-gradient(135deg, #ef5b38, #d9482b) !important;
-            box-shadow: 0 6px 18px rgba(239, 91, 56, 0.20);
+        body.body--dark .q-btn.bg-primary {
+            background: linear-gradient(135deg, #4aaa78, #337f57) !important;
+            box-shadow: 0 6px 18px rgba(63, 158, 104, 0.24);
         }
 
-        .body--dark .q-btn.text-primary {
-            color: #ff7654 !important;
+        body.body--dark .q-btn.text-primary {
+            color: #66c992 !important;
         }
 
         .body--dark .text-grey-7,
