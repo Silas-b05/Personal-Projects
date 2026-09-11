@@ -1,44 +1,47 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import libsql
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATABASE_PATH = Path(
-    os.environ.get("WORKOUT_TRACKER_DATABASE_PATH", str(DATA_DIR / "workout_tracker.db"))
-)
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 
 
-def connect(database_path: Path | str = DATABASE_PATH) -> sqlite3.Connection:
-    connection = sqlite3.connect(database_path)
-    connection.row_factory = sqlite3.Row
+def connect() -> Any:
+    database_url = os.environ.get("TURSO_DATABASE_URL")
+    auth_token = os.environ.get("TURSO_AUTH_TOKEN")
+    if not database_url or not auth_token:
+        raise RuntimeError(
+            "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must both be set."
+        )
+    connection = libsql.connect(database=database_url, auth_token=auth_token)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
 
-def initialize_database(database_path: Path | str = DATABASE_PATH) -> None:
-    path = Path(database_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with connect(path) as connection:
+def initialize_database() -> None:
+    with connect() as connection:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def _rows(query: str, parameters: Iterable[Any] = ()) -> list[dict[str, Any]]:
     with connect() as connection:
-        return [dict(row) for row in connection.execute(query, tuple(parameters)).fetchall()]
+        cursor = connection.execute(query, tuple(parameters))
+        columns = [description[0] for description in cursor.description or ()]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
 def _execute(query: str, parameters: Iterable[Any] = ()) -> int:
     with connect() as connection:
         cursor = connection.execute(query, tuple(parameters))
+        row = cursor.fetchone() if cursor.description else None
         connection.commit()
-        return int(cursor.lastrowid or 0)
+        return int(row[0]) if row else 0
 
 
 def list_gyms() -> list[dict[str, Any]]:
@@ -47,7 +50,7 @@ def list_gyms() -> list[dict[str, Any]]:
 
 def add_gym(name: str, notes: str = "") -> int:
     return _execute(
-        "INSERT INTO gyms(name, notes) VALUES (?, ?)",
+        "INSERT INTO gyms(name, notes) VALUES (?, ?) RETURNING id",
         (name.strip(), notes.strip()),
     )
 
@@ -62,7 +65,7 @@ def list_exercises() -> list[dict[str, Any]]:
 
 def add_exercise(name: str, muscle_group: str = "", notes: str = "") -> int:
     return _execute(
-        "INSERT INTO exercises(name, muscle_group, notes) VALUES (?, ?, ?)",
+        "INSERT INTO exercises(name, muscle_group, notes) VALUES (?, ?, ?) RETURNING id",
         (name.strip(), muscle_group.strip(), notes.strip()),
     )
 
@@ -77,7 +80,7 @@ def list_templates() -> list[dict[str, Any]]:
 
 def add_template(name: str, notes: str = "") -> int:
     return _execute(
-        "INSERT INTO workout_templates(name, notes) VALUES (?, ?)",
+        "INSERT INTO workout_templates(name, notes) VALUES (?, ?) RETURNING id",
         (name.strip(), notes.strip()),
     )
 
@@ -115,12 +118,13 @@ def add_template_exercise(
             """
             INSERT INTO template_exercises(
                 template_id, exercise_id, position, target_sets, target_reps
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?) RETURNING id
             """,
             (template_id, exercise_id, position, target_sets, target_reps.strip()),
         )
+        row = cursor.fetchone()
         connection.commit()
-        return int(cursor.lastrowid)
+        return int(row[0])
 
 
 def remove_template_exercise(template_exercise_id: int) -> None:
@@ -138,7 +142,7 @@ def remove_template_exercise(template_exercise_id: int) -> None:
             SET position = position - 1
             WHERE template_id = ? AND position > ?
             """,
-            (row["template_id"], row["position"]),
+            (row[0], row[1]),
         )
         connection.commit()
 
@@ -194,7 +198,7 @@ def save_machine_setting(
             (gym_id, exercise_id, setting_name.strip()),
         ).fetchone()
         connection.commit()
-        return int(row["id"])
+        return int(row[0])
 
 
 def delete_machine_setting(setting_id: int) -> None:
@@ -203,7 +207,10 @@ def delete_machine_setting(setting_id: int) -> None:
 
 def create_session(gym_id: int, template_id: int) -> int:
     return _execute(
-        "INSERT INTO workout_sessions(gym_id, template_id, started_at) VALUES (?, ?, ?)",
+        """
+        INSERT INTO workout_sessions(gym_id, template_id, started_at)
+        VALUES (?, ?, ?) RETURNING id
+        """,
         (gym_id, template_id, datetime.now().astimezone().isoformat(timespec="seconds")),
     )
 

@@ -1,8 +1,8 @@
 # Workout Tracker
 
 A small learning project for recording gym-specific machine settings and workout performance.
-The interface is built with [NiceGUI](https://nicegui.io/) and all data is stored locally in
-SQLite.
+The interface is built with [NiceGUI](https://nicegui.io/) and data is stored in Turso using its
+SQLite-compatible libSQL service.
 
 ## Features
 
@@ -22,12 +22,14 @@ Python 3.10 or newer is recommended.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export TURSO_DATABASE_URL="libsql://your-database.turso.io"
+export TURSO_AUTH_TOKEN="your-token"
 python app.py
 ```
 
-NiceGUI prints the local address in the terminal (normally `http://localhost:8080`). The app
-creates `data/workout_tracker.db` on first launch. That database is intentionally ignored by
-Git so personal workout data stays local.
+NiceGUI prints the local address in the terminal (normally `http://localhost:8080`). Create the
+database URL and token in Turso before starting the app. Never place the real values in source
+files; local `.env` files are ignored by Git.
 
 The selected color theme is remembered in the browser. For a shared or deployed installation,
 set `WORKOUT_TRACKER_STORAGE_SECRET` to a private random value before starting the app.
@@ -44,7 +46,7 @@ reach it.
 ```text
 workout-tracker/
 ├── app.py              # NiceGUI pages and event handlers
-├── database.py         # SQLite queries and small CRUD functions
+├── database.py         # Turso connection, SQLite queries, and small CRUD functions
 ├── schema.sql          # Tables, constraints, and indexes
 ├── requirements.txt    # Python dependency
 ├── README.md           # Setup and project documentation
@@ -73,16 +75,18 @@ The repository includes a root-level `render.yaml` Blueprint. In Render, create 
 connect the `Personal-Projects` repository, and approve the proposed `workout-tracker` service.
 Render will build and start the app from this subdirectory automatically.
 
-The Blueprint provisions a small persistent disk and stores SQLite at
-`/var/data/workout_tracker.db`. A persistent disk requires a paid Render web service; without
-one, Render's ephemeral filesystem would erase workout data during redeploys and restarts.
+The Blueprint uses Render's free web-service plan. Workout data remains in Turso, so Render's
+ephemeral filesystem does not affect it.
 
 The deployed service uses these environment variables:
 
 - `PORT`: provided automatically by Render and used by NiceGUI.
 - `WORKOUT_TRACKER_STORAGE_SECRET`: generated automatically by the Blueprint.
-- `WORKOUT_TRACKER_DATABASE_PATH`: points SQLite at the persistent disk.
+- `TURSO_DATABASE_URL`: your Turso database URL, such as `libsql://...`.
+- `TURSO_AUTH_TOKEN`: a token created for that Turso database.
 
-The app is intentionally still a single-process SQLite learning project. Do not scale it to
-multiple service instances. It also has no login screen, so anyone with the public Render URL can
-use and change its data.
+For a new Blueprint, Render prompts for the two Turso values. For an existing Render service, add
+them manually under **Environment** and redeploy. The values are secrets and are never stored in
+this repository.
+
+The app has no login screen, so anyone with the public Render URL can use and change its data.

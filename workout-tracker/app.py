@@ -422,7 +422,7 @@ def page_title(title: str, subtitle: str = "") -> None:
         ui.label(subtitle).classes("page-subtitle text-grey-7 mb-4")
 
 
-def notify_database_error(error: sqlite3.IntegrityError) -> None:
+def notify_database_error(error: Exception) -> None:
     message = str(error)
     if "UNIQUE constraint failed" in message:
         ui.notify("That item already exists.", type="negative")
@@ -492,7 +492,7 @@ def simple_management_page(
                 return
             try:
                 add_row(name.value, second.value or "")
-            except sqlite3.IntegrityError as error:
+            except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
             ui.notify("Saved", type="positive")
@@ -516,7 +516,7 @@ def simple_management_page(
                     def remove(row_id: int = row["id"]) -> None:
                         try:
                             delete_row(row_id)
-                        except sqlite3.IntegrityError as error:
+                        except (sqlite3.IntegrityError, ValueError) as error:
                             notify_database_error(error)
                             return
                         ui.navigate.reload()
@@ -562,7 +562,7 @@ def templates_page() -> None:
                 return
             try:
                 db.add_template(template_name.value, template_notes.value or "")
-            except sqlite3.IntegrityError as error:
+            except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
             ui.navigate.reload()
@@ -585,7 +585,7 @@ def templates_page() -> None:
                     def remove_template(template_id: int = template["id"]) -> None:
                         try:
                             db.delete_template(template_id)
-                        except sqlite3.IntegrityError as error:
+                        except (sqlite3.IntegrityError, ValueError) as error:
                             notify_database_error(error)
                             return
                         ui.navigate.reload()
@@ -639,7 +639,7 @@ def templates_page() -> None:
                             int(sets_input.value or 1),
                             reps_input.value or "",
                         )
-                    except sqlite3.IntegrityError as error:
+                    except (sqlite3.IntegrityError, ValueError) as error:
                         notify_database_error(error)
                         return
                     ui.navigate.reload()
