@@ -14,6 +14,14 @@ db.initialize_database()
 
 ui.add_head_html(
     """
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Workout Tracker">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#1976d2">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0b0d">
     <style>
         :root {
             --app-radius: 18px;
@@ -24,6 +32,24 @@ ui.add_head_html(
         .q-layout,
         .q-page-container {
             transition: background-color 180ms ease, color 180ms ease;
+        }
+
+        html,
+        body,
+        .q-layout,
+        .q-page-container,
+        .nicegui-content {
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+
+        .page-shell,
+        .q-card,
+        .q-row,
+        .q-column,
+        .nicegui-row,
+        .nicegui-column {
+            min-width: 0;
         }
 
         .app-header {
@@ -62,6 +88,10 @@ ui.add_head_html(
         .q-menu,
         .q-notification {
             border-radius: var(--app-control-radius) !important;
+        }
+
+        .mobile-bottom-nav {
+            display: none !important;
         }
 
         body.body--dark,
@@ -134,15 +164,175 @@ ui.add_head_html(
         }
 
         @media (max-width: 760px) {
-            .app-header {
-                gap: 0.15rem;
-                overflow-x: auto;
-                flex-wrap: nowrap;
+            .nicegui-content {
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+                padding-bottom: calc(74px + env(safe-area-inset-bottom)) !important;
             }
 
-            .app-header .q-btn {
-                padding-left: 0.55rem;
-                padding-right: 0.55rem;
+            .page-shell {
+                gap: 0.85rem !important;
+                padding: 1.1rem 0.9rem 1.5rem !important;
+            }
+
+            .app-header {
+                min-height: calc(58px + env(safe-area-inset-top));
+                gap: 0.55rem;
+                overflow: hidden;
+                flex-wrap: nowrap;
+                padding: env(safe-area-inset-top) max(0.85rem, env(safe-area-inset-right)) 0
+                         max(0.85rem, env(safe-area-inset-left));
+            }
+
+            .desktop-nav {
+                display: none !important;
+            }
+
+            .brand-label {
+                font-size: 1.08rem !important;
+            }
+
+            .mobile-bottom-nav {
+                display: grid !important;
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                position: fixed;
+                z-index: 3000;
+                right: 0;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                gap: 0 !important;
+                padding: 0 max(0.2rem, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+                         max(0.2rem, env(safe-area-inset-left));
+                background: rgba(255, 255, 255, 0.97);
+                border-top: 1px solid rgba(15, 23, 42, 0.12);
+                box-shadow: 0 -8px 28px rgba(15, 23, 42, 0.10);
+                backdrop-filter: blur(16px);
+            }
+
+            .body--dark .mobile-bottom-nav {
+                background: rgba(17, 17, 19, 0.97);
+                border-top-color: #303035;
+                box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.34);
+            }
+
+            .mobile-nav-button {
+                width: 100%;
+                min-width: 0 !important;
+                min-height: 64px !important;
+                padding: 0.3rem 0.1rem !important;
+                border-radius: 0 !important;
+                font-size: 0.62rem !important;
+                line-height: 1.05;
+            }
+
+            .mobile-nav-button .q-icon {
+                font-size: 1.35rem;
+            }
+
+            .q-card {
+                padding: 1rem !important;
+                border-radius: 16px !important;
+            }
+
+            .q-card:hover {
+                transform: none;
+            }
+
+            .q-btn {
+                min-height: 48px;
+                touch-action: manipulation;
+            }
+
+            .q-btn--round {
+                min-width: 48px;
+            }
+
+            .mobile-full-button {
+                width: 100%;
+            }
+
+            .q-field__control {
+                min-height: 54px !important;
+            }
+
+            .q-field__native,
+            .q-field__input,
+            textarea {
+                font-size: 16px !important;
+            }
+
+            .page-title {
+                font-size: 1.75rem !important;
+                line-height: 1.15 !important;
+            }
+
+            .page-subtitle {
+                margin-bottom: 0.4rem !important;
+                line-height: 1.45;
+            }
+
+            .mobile-stack-row,
+            .template-add-fields,
+            .settings-list-row,
+            .history-row {
+                align-items: stretch !important;
+                flex-direction: column !important;
+                gap: 0.65rem !important;
+            }
+
+            .management-row {
+                display: grid !important;
+                grid-template-columns: minmax(0, 1fr) auto;
+                width: 100%;
+                gap: 0.75rem !important;
+                align-items: center !important;
+            }
+
+            .template-add-fields > *,
+            .template-add-fields .q-field,
+            .setting-identity {
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+
+            .template-item-row {
+                display: grid !important;
+                grid-template-columns: minmax(0, 1fr) auto;
+                gap: 0.35rem 0.5rem !important;
+                align-items: center !important;
+            }
+
+            .template-item-target {
+                grid-column: 1;
+            }
+
+            .template-item-remove {
+                grid-column: 2;
+                grid-row: 1 / span 2;
+            }
+
+            .set-entry-row {
+                display: grid !important;
+                grid-template-columns: 3.2rem minmax(0, 1fr) minmax(0, 0.78fr);
+                width: 100%;
+                gap: 0.5rem !important;
+                align-items: center !important;
+            }
+
+            .set-entry-row .q-field {
+                width: 100% !important;
+                min-width: 0;
+            }
+
+            .set-number {
+                width: auto !important;
+                white-space: nowrap;
+            }
+
+            .history-open-button,
+            .save-sets-button {
+                width: 100%;
             }
         }
     </style>
@@ -156,28 +346,39 @@ def navigation() -> None:
     dark_mode = ui.dark_mode(app.storage.user["dark_mode"]).bind_value(
         app.storage.user, "dark_mode"
     )
+    navigation_items = (
+        ("Today", "/", "fitness_center"),
+        ("Gyms", "/gyms", "location_on"),
+        ("Exercises", "/exercises", "directions_run"),
+        ("Templates", "/templates", "view_list"),
+        ("Settings", "/settings", "tune"),
+        ("History", "/history", "history"),
+    )
     with ui.header().classes("app-header items-center"):
         ui.icon("fitness_center", size="sm")
-        ui.label("Workout Tracker").classes("text-h6 whitespace-nowrap")
+        ui.label("Workout Tracker").classes("brand-label text-h6 whitespace-nowrap")
         ui.space()
-        for label, target in (
-            ("Today", "/"),
-            ("Gyms", "/gyms"),
-            ("Exercises", "/exercises"),
-            ("Templates", "/templates"),
-            ("Machine settings", "/settings"),
-            ("History", "/history"),
-        ):
-            ui.button(label, on_click=lambda path=target: ui.navigate.to(path)).props("flat color=white")
+        with ui.row().classes("desktop-nav items-center gap-1"):
+            for label, target, _ in navigation_items:
+                ui.button(label, on_click=lambda path=target: ui.navigate.to(path)).props(
+                    "flat color=white"
+                )
         ui.button(icon="contrast", on_click=dark_mode.toggle).props(
             "flat round color=white aria-label='Toggle dark mode'"
         ).tooltip("Toggle light/dark mode")
+    with ui.row().classes("mobile-bottom-nav"):
+        for label, target, icon in navigation_items:
+            ui.button(
+                label,
+                icon=icon,
+                on_click=lambda path=target: ui.navigate.to(path),
+            ).props("flat stack no-caps").classes("mobile-nav-button")
 
 
 def page_title(title: str, subtitle: str = "") -> None:
-    ui.label(title).classes("text-h4 font-bold")
+    ui.label(title).classes("page-title text-h4 font-bold")
     if subtitle:
-        ui.label(subtitle).classes("text-grey-7 mb-4")
+        ui.label(subtitle).classes("page-subtitle text-grey-7 mb-4")
 
 
 def notify_database_error(error: sqlite3.IntegrityError) -> None:
@@ -197,7 +398,7 @@ def options(rows: list[dict], label_key: str = "name") -> dict[int, str]:
 @ui.page("/")
 def home_page() -> None:
     navigation()
-    with ui.column().classes("w-full max-w-3xl mx-auto p-6 gap-4"):
+    with ui.column().classes("page-shell w-full max-w-3xl mx-auto p-6 gap-4"):
         page_title("Train today", "Choose a gym and workout day, then record your sets.")
         gyms = db.list_gyms()
         templates = db.list_templates()
@@ -206,9 +407,13 @@ def home_page() -> None:
             ui.label("Add at least one gym and one workout template before starting.").classes(
                 "text-orange-8"
             )
-            with ui.row():
-                ui.button("Add a gym", on_click=lambda: ui.navigate.to("/gyms"))
-                ui.button("Build a template", on_click=lambda: ui.navigate.to("/templates"))
+            with ui.row().classes("mobile-stack-row w-full"):
+                ui.button("Add a gym", on_click=lambda: ui.navigate.to("/gyms")).classes(
+                    "mobile-full-button"
+                )
+                ui.button(
+                    "Build a template", on_click=lambda: ui.navigate.to("/templates")
+                ).classes("mobile-full-button")
             return
 
         gym = ui.select(options(gyms), label="Gym").classes("w-full")
@@ -221,7 +426,9 @@ def home_page() -> None:
             session_id = db.create_session(int(gym.value), int(template.value))
             ui.navigate.to(f"/session/{session_id}")
 
-        ui.button("Start workout", icon="fitness_center", on_click=start_workout).props("unelevated")
+        ui.button("Start workout", icon="fitness_center", on_click=start_workout).props(
+            "unelevated"
+        ).classes("mobile-full-button")
 
 
 def simple_management_page(
@@ -233,7 +440,7 @@ def simple_management_page(
     second_label: str,
 ) -> None:
     navigation()
-    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
+    with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title(title, subtitle)
         name = ui.input("Name").classes("w-full")
         second = ui.input(second_label).classes("w-full")
@@ -250,14 +457,14 @@ def simple_management_page(
             ui.notify("Saved", type="positive")
             ui.navigate.reload()
 
-        ui.button("Add", on_click=save)
+        ui.button("Add", on_click=save).classes("mobile-full-button")
         ui.separator().classes("my-4")
         rows = load_rows()
         if not rows:
             ui.label("Nothing added yet.").classes("text-grey-7")
         for row in rows:
             with ui.card().classes("w-full"):
-                with ui.row().classes("w-full items-center"):
+                with ui.row().classes("management-row w-full items-center"):
                     with ui.column().classes("gap-0"):
                         ui.label(row["name"]).classes("font-medium")
                         detail = row.get("notes") or row.get("muscle_group") or ""
@@ -303,7 +510,7 @@ def exercises_page() -> None:
 @ui.page("/templates")
 def templates_page() -> None:
     navigation()
-    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
+    with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title("Workout templates", "Create workout days and add exercises in training order.")
         template_name = ui.input("New template name (for example Push A)").classes("w-full")
         template_notes = ui.input("Notes (optional)").classes("w-full")
@@ -319,7 +526,7 @@ def templates_page() -> None:
                 return
             ui.navigate.reload()
 
-        ui.button("Create template", on_click=create_template)
+        ui.button("Create template", on_click=create_template).classes("mobile-full-button")
         ui.separator().classes("my-4")
 
         templates = db.list_templates()
@@ -348,10 +555,12 @@ def templates_page() -> None:
 
                 template_items = db.list_template_exercises(template["id"])
                 for item in template_items:
-                    with ui.row().classes("w-full items-center border-b border-grey-3 py-2"):
+                    with ui.row().classes(
+                        "template-item-row w-full items-center border-b border-grey-3 py-2"
+                    ):
                         ui.label(f'{item["position"]}. {item["exercise_name"]}')
                         ui.label(f'{item["target_sets"]} sets × {item["target_reps"]} reps').classes(
-                            "text-grey-7"
+                            "template-item-target text-grey-7"
                         )
                         ui.space()
 
@@ -359,14 +568,19 @@ def templates_page() -> None:
                             db.remove_template_exercise(item_id)
                             ui.navigate.reload()
 
-                        ui.button(icon="close", on_click=remove_item).props("flat round dense")
+                        ui.button(icon="close", on_click=remove_item).props(
+                            "flat round dense"
+                        ).classes("template-item-remove")
 
                 if not exercises:
                     ui.label("Add exercises before filling this template.").classes("text-orange-8")
                     continue
-                exercise = ui.select(options(exercises), label="Exercise").classes("w-64")
-                target_sets = ui.number("Sets", value=3, min=1, step=1).classes("w-28")
-                target_reps = ui.input("Target reps", value="8-12").classes("w-32")
+                with ui.row().classes("template-add-fields w-full items-end"):
+                    exercise = ui.select(options(exercises), label="Exercise").classes(
+                        "flex-1 min-w-64"
+                    )
+                    target_sets = ui.number("Sets", value=3, min=1, step=1).classes("w-28")
+                    target_reps = ui.input("Target reps", value="8-12").classes("w-32")
 
                 def add_item(
                     template_id: int = template["id"],
@@ -389,13 +603,15 @@ def templates_page() -> None:
                         return
                     ui.navigate.reload()
 
-                ui.button("Add exercise", icon="add", on_click=add_item).props("flat")
+                ui.button("Add exercise", icon="add", on_click=add_item).props("flat").classes(
+                    "mobile-full-button"
+                )
 
 
 @ui.page("/settings")
 def settings_page() -> None:
     navigation()
-    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
+    with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title(
             "Machine settings",
             "Save equipment adjustments for each gym and exercise. Reusing a name updates its value.",
@@ -429,12 +645,14 @@ def settings_page() -> None:
             )
             ui.navigate.reload()
 
-        ui.button("Save setting", on_click=save_setting)
+        ui.button("Save setting", on_click=save_setting).classes("mobile-full-button")
         ui.separator().classes("my-4")
         for setting in db.list_machine_settings():
-            with ui.row().classes("w-full items-center border-b border-grey-3 py-2"):
+            with ui.row().classes(
+                "settings-list-row w-full items-center border-b border-grey-3 py-2"
+            ):
                 ui.label(f'{setting["gym_name"]} · {setting["exercise_name"]}').classes(
-                    "font-medium w-72"
+                    "setting-identity font-medium w-72"
                 )
                 ui.label(f'{setting["setting_name"]}: {setting["setting_value"]}')
                 ui.space()
@@ -450,7 +668,7 @@ def settings_page() -> None:
 def session_page(session_id: int) -> None:
     navigation()
     session = db.get_session(session_id)
-    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
+    with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         if session is None:
             page_title("Workout not found")
             ui.button("Back home", on_click=lambda: ui.navigate.to("/"))
@@ -497,8 +715,8 @@ def session_page(session_id: int) -> None:
                 for set_number in range(1, item["target_sets"] + 1):
                     saved = next((s for s in current_sets if s["set_number"] == set_number), None)
                     previous = next((s for s in old_sets if s["set_number"] == set_number), None)
-                    with ui.row().classes("items-center"):
-                        ui.label(f"Set {set_number}").classes("w-14")
+                    with ui.row().classes("set-entry-row items-center"):
+                        ui.label(f"Set {set_number}").classes("set-number w-14")
                         weight = ui.number(
                             "Weight (kg)",
                             value=saved["weight"] if saved else (previous["weight"] if previous else None),
@@ -530,7 +748,9 @@ def session_page(session_id: int) -> None:
                     db.save_exercise_sets(session_id, exercise_id, completed)
                     ui.notify("Sets saved", type="positive")
 
-                ui.button("Save sets", icon="save", on_click=save_sets).props("flat")
+                ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
+                    "save-sets-button"
+                )
 
         notes = ui.textarea("Workout notes (optional)").classes("w-full")
 
@@ -541,20 +761,20 @@ def session_page(session_id: int) -> None:
 
         ui.button("Finish workout", icon="check", on_click=complete_workout).props(
             "unelevated color=positive"
-        )
+        ).classes("mobile-full-button")
 
 
 @ui.page("/history")
 def history_page() -> None:
     navigation()
-    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
+    with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title("Workout history", "Your 20 most recent sessions.")
         sessions = db.list_sessions()
         if not sessions:
             ui.label("No workouts recorded yet.").classes("text-grey-7")
         for session in sessions:
             with ui.card().classes("w-full"):
-                with ui.row().classes("w-full items-center"):
+                with ui.row().classes("history-row w-full items-center"):
                     with ui.column().classes("gap-0"):
                         ui.label(session["template_name"]).classes("font-medium")
                         date = datetime.fromisoformat(session["started_at"]).strftime("%Y-%m-%d %H:%M")
@@ -567,7 +787,7 @@ def history_page() -> None:
                         "Open", on_click=lambda session_id=session["id"]: ui.navigate.to(
                             f"/session/{session_id}"
                         )
-                    ).props("flat")
+                    ).props("flat").classes("history-open-button")
 
 
 ui.run(

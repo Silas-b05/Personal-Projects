@@ -32,6 +32,13 @@ Git so personal workout data stays local.
 The selected color theme is remembered in the browser. For a shared or deployed installation,
 set `WORKOUT_TRACKER_STORAGE_SECRET` to a private random value before starting the app.
 
+## Use on iPhone
+
+Open the app's address in Safari, tap **Share**, then choose **Add to Home Screen**. The mobile
+layout accounts for the iPhone safe areas and provides a fixed bottom navigation bar for quick
+access during workouts. Keep the computer running the app and the iPhone on a network that can
+reach it.
+
 ## Project structure
 
 ```text
