@@ -145,7 +145,8 @@ ui.add_head_html(
             }
         }
     </style>
-    """
+    """,
+    shared=True,
 )
 
 
