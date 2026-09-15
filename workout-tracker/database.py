@@ -10,6 +10,8 @@ import libsql
 
 BASE_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = BASE_DIR / "schema.sql"
+DEFAULT_MACHINE_NAME = "Default machine"
+MACHINE_MIGRATION_NAME = "add_multiple_machines_v1"
 
 
 def connect() -> Any:
@@ -27,6 +29,67 @@ def connect() -> Any:
 def initialize_database() -> None:
     with connect() as connection:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        _migrate_legacy_machine_data(connection)
+        connection.commit()
+
+
+def _migrate_legacy_machine_data(connection: Any) -> None:
+    """Copy the original one-machine settings into the machine-aware schema.
+
+    The legacy table remains untouched. INSERT OR IGNORE makes this safe to run
+    during every startup without overwriting later edits or creating duplicates.
+    """
+    already_applied = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?",
+        (MACHINE_MIGRATION_NAME,),
+    ).fetchone()
+    if already_applied is not None:
+        return
+
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO machines(gym_id, exercise_id, name)
+        SELECT DISTINCT gym_id, exercise_id, ?
+        FROM machine_settings
+        """,
+        (DEFAULT_MACHINE_NAME,),
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO machine_adjustments(
+            machine_id, setting_name, setting_value
+        )
+        SELECT m.id, ms.setting_name, ms.setting_value
+        FROM machine_settings AS ms
+        JOIN machines AS m
+          ON m.gym_id = ms.gym_id
+         AND m.exercise_id = ms.exercise_id
+         AND m.name = ? COLLATE NOCASE
+        """,
+        (DEFAULT_MACHINE_NAME,),
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO session_exercise_machines(
+            session_id, exercise_id, machine_id
+        )
+        SELECT DISTINCT ws.id, wset.exercise_id, m.id
+        FROM workout_sets AS wset
+        JOIN workout_sessions AS ws ON ws.id = wset.session_id
+        JOIN machines AS m
+          ON m.gym_id = ws.gym_id
+         AND m.exercise_id = wset.exercise_id
+         AND m.name = ? COLLATE NOCASE
+        """,
+        (DEFAULT_MACHINE_NAME,),
+    )
+    connection.execute(
+        "INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)",
+        (
+            MACHINE_MIGRATION_NAME,
+            datetime.now().astimezone().isoformat(timespec="seconds"),
+        ),
+    )
 
 
 def _rows(query: str, parameters: Iterable[Any] = ()) -> list[dict[str, Any]]:
@@ -40,6 +103,7 @@ def _execute(query: str, parameters: Iterable[Any] = ()) -> int:
     with connect() as connection:
         cursor = connection.execute(query, tuple(parameters))
         row = cursor.fetchone() if cursor.description else None
+        cursor.close()
         connection.commit()
         return int(row[0]) if row else 0
 
@@ -123,6 +187,7 @@ def add_template_exercise(
             (template_id, exercise_id, position, target_sets, target_reps.strip()),
         )
         row = cursor.fetchone()
+        cursor.close()
         connection.commit()
         return int(row[0])
 
@@ -147,62 +212,112 @@ def remove_template_exercise(template_exercise_id: int) -> None:
         connection.commit()
 
 
-def list_machine_settings(
+def list_machines(
     gym_id: int | None = None,
     exercise_id: int | None = None,
 ) -> list[dict[str, Any]]:
     conditions: list[str] = []
     parameters: list[Any] = []
     if gym_id is not None:
-        conditions.append("ms.gym_id = ?")
+        conditions.append("m.gym_id = ?")
         parameters.append(gym_id)
     if exercise_id is not None:
-        conditions.append("ms.exercise_id = ?")
+        conditions.append("m.exercise_id = ?")
         parameters.append(exercise_id)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     return _rows(
         f"""
-        SELECT ms.*, g.name AS gym_name, e.name AS exercise_name
-        FROM machine_settings AS ms
-        JOIN gyms AS g ON g.id = ms.gym_id
-        JOIN exercises AS e ON e.id = ms.exercise_id
+        SELECT m.*, g.name AS gym_name, e.name AS exercise_name
+        FROM machines AS m
+        JOIN gyms AS g ON g.id = m.gym_id
+        JOIN exercises AS e ON e.id = m.exercise_id
         {where}
-        ORDER BY g.name COLLATE NOCASE, e.name COLLATE NOCASE,
-                 ms.setting_name COLLATE NOCASE
+        ORDER BY g.name COLLATE NOCASE, e.name COLLATE NOCASE, m.name COLLATE NOCASE
         """,
         parameters,
     )
 
 
+def add_machine(gym_id: int, exercise_id: int, name: str) -> int:
+    return _execute(
+        """
+        INSERT INTO machines(gym_id, exercise_id, name)
+        VALUES (?, ?, ?) RETURNING id
+        """,
+        (gym_id, exercise_id, name.strip()),
+    )
+
+
+def rename_machine(machine_id: int, name: str) -> None:
+    _execute(
+        "UPDATE machines SET name = ? WHERE id = ?",
+        (name.strip(), machine_id),
+    )
+
+
+def delete_machine(machine_id: int) -> None:
+    with connect() as connection:
+        connection.execute(
+            """
+            DELETE FROM session_exercise_machines
+            WHERE machine_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM workout_sets AS wset
+                  WHERE wset.session_id = session_exercise_machines.session_id
+                    AND wset.exercise_id = session_exercise_machines.exercise_id
+              )
+            """,
+            (machine_id,),
+        )
+        connection.execute("DELETE FROM machines WHERE id = ?", (machine_id,))
+        connection.commit()
+
+
+def list_machine_settings(machine_id: int) -> list[dict[str, Any]]:
+    return _rows(
+        """
+        SELECT ma.*, m.name AS machine_name, m.gym_id, m.exercise_id,
+               g.name AS gym_name, e.name AS exercise_name
+        FROM machine_adjustments AS ma
+        JOIN machines AS m ON m.id = ma.machine_id
+        JOIN gyms AS g ON g.id = m.gym_id
+        JOIN exercises AS e ON e.id = m.exercise_id
+        WHERE ma.machine_id = ?
+        ORDER BY ma.setting_name COLLATE NOCASE
+        """,
+        (machine_id,),
+    )
+
+
 def save_machine_setting(
-    gym_id: int,
-    exercise_id: int,
+    machine_id: int,
     setting_name: str,
     setting_value: str,
 ) -> int:
     with connect() as connection:
         connection.execute(
             """
-            INSERT INTO machine_settings(gym_id, exercise_id, setting_name, setting_value)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(gym_id, exercise_id, setting_name)
+            INSERT INTO machine_adjustments(machine_id, setting_name, setting_value)
+            VALUES (?, ?, ?)
+            ON CONFLICT(machine_id, setting_name)
             DO UPDATE SET setting_value = excluded.setting_value
             """,
-            (gym_id, exercise_id, setting_name.strip(), setting_value.strip()),
+            (machine_id, setting_name.strip(), setting_value.strip()),
         )
         row = connection.execute(
             """
-            SELECT id FROM machine_settings
-            WHERE gym_id = ? AND exercise_id = ? AND setting_name = ?
+            SELECT id FROM machine_adjustments
+            WHERE machine_id = ? AND setting_name = ? COLLATE NOCASE
             """,
-            (gym_id, exercise_id, setting_name.strip()),
+            (machine_id, setting_name.strip()),
         ).fetchone()
         connection.commit()
         return int(row[0])
 
 
 def delete_machine_setting(setting_id: int) -> None:
-    _execute("DELETE FROM machine_settings WHERE id = ?", (setting_id,))
+    _execute("DELETE FROM machine_adjustments WHERE id = ?", (setting_id,))
 
 
 def create_session(gym_id: int, template_id: int) -> int:
@@ -258,22 +373,120 @@ def list_session_sets(session_id: int, exercise_id: int) -> list[dict[str, Any]]
     )
 
 
-def previous_sets(
+def get_session_machine(session_id: int, exercise_id: int) -> int | None:
+    rows = _rows(
+        """
+        SELECT machine_id
+        FROM session_exercise_machines
+        WHERE session_id = ? AND exercise_id = ?
+        """,
+        (session_id, exercise_id),
+    )
+    return int(rows[0]["machine_id"]) if rows else None
+
+
+def suggested_machine(
     session_id: int,
     gym_id: int,
     exercise_id: int,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    sessions = _rows(
+) -> int | None:
+    current_machine = get_session_machine(session_id, exercise_id)
+    if current_machine is not None:
+        return current_machine
+
+    rows = _rows(
         """
-        SELECT DISTINCT ws.id, ws.started_at
+        SELECT sem.machine_id
         FROM workout_sessions AS ws
-        JOIN workout_sets AS wset ON wset.session_id = ws.id
-        WHERE ws.id != ? AND ws.gym_id = ? AND wset.exercise_id = ?
+        JOIN session_exercise_machines AS sem ON sem.session_id = ws.id
+        JOIN workout_sets AS wset
+          ON wset.session_id = ws.id AND wset.exercise_id = sem.exercise_id
+        JOIN machines AS m ON m.id = sem.machine_id
+        WHERE ws.id != ? AND ws.gym_id = ? AND sem.exercise_id = ?
+          AND m.gym_id = ws.gym_id AND m.exercise_id = sem.exercise_id
         ORDER BY ws.started_at DESC
         LIMIT 1
         """,
         (session_id, gym_id, exercise_id),
     )
+    return int(rows[0]["machine_id"]) if rows else None
+
+
+def set_session_machine(session_id: int, exercise_id: int, machine_id: int) -> None:
+    with connect() as connection:
+        valid_machine = connection.execute(
+            """
+            SELECT 1
+            FROM workout_sessions AS ws
+            JOIN machines AS m
+              ON m.gym_id = ws.gym_id AND m.exercise_id = ?
+            WHERE ws.id = ? AND m.id = ?
+            """,
+            (exercise_id, session_id, machine_id),
+        ).fetchone()
+        if valid_machine is None:
+            raise ValueError("The selected machine does not belong to this gym and exercise.")
+        connection.execute(
+            """
+            INSERT INTO session_exercise_machines(session_id, exercise_id, machine_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(session_id, exercise_id)
+            DO UPDATE SET machine_id = excluded.machine_id
+            """,
+            (session_id, exercise_id, machine_id),
+        )
+        connection.commit()
+
+
+def previous_sets(
+    session_id: int,
+    gym_id: int,
+    exercise_id: int,
+    machine_id: int | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if machine_id is None:
+        sessions = _rows(
+            """
+            SELECT DISTINCT ws.id, ws.started_at
+            FROM workout_sessions AS ws
+            JOIN workout_sets AS wset ON wset.session_id = ws.id
+            WHERE ws.id != ? AND ws.gym_id = ? AND wset.exercise_id = ?
+            ORDER BY ws.started_at DESC
+            LIMIT 1
+            """,
+            (session_id, gym_id, exercise_id),
+        )
+    else:
+        sessions = _rows(
+            """
+            SELECT DISTINCT ws.id, ws.started_at
+            FROM workout_sessions AS ws
+            JOIN workout_sets AS wset ON wset.session_id = ws.id
+            JOIN session_exercise_machines AS sem
+              ON sem.session_id = ws.id AND sem.exercise_id = wset.exercise_id
+            WHERE ws.id != ? AND ws.gym_id = ? AND wset.exercise_id = ?
+              AND sem.machine_id = ?
+            ORDER BY ws.started_at DESC
+            LIMIT 1
+            """,
+            (session_id, gym_id, exercise_id, machine_id),
+        )
+        if not sessions:
+            # Sessions created before machine tracking may not have an association.
+            sessions = _rows(
+                """
+                SELECT DISTINCT ws.id, ws.started_at
+                FROM workout_sessions AS ws
+                JOIN workout_sets AS wset ON wset.session_id = ws.id
+                LEFT JOIN session_exercise_machines AS sem
+                  ON sem.session_id = ws.id AND sem.exercise_id = wset.exercise_id
+                WHERE ws.id != ? AND ws.gym_id = ? AND wset.exercise_id = ?
+                  AND sem.machine_id IS NULL
+                ORDER BY ws.started_at DESC
+                LIMIT 1
+                """,
+                (session_id, gym_id, exercise_id),
+            )
     if not sessions:
         return None, []
     previous_session = sessions[0]
@@ -284,8 +497,31 @@ def save_exercise_sets(
     session_id: int,
     exercise_id: int,
     sets: list[tuple[int, float, int]],
+    machine_id: int | None = None,
 ) -> None:
     with connect() as connection:
+        if machine_id is not None:
+            valid_machine = connection.execute(
+                """
+                SELECT 1
+                FROM workout_sessions AS ws
+                JOIN machines AS m
+                  ON m.gym_id = ws.gym_id AND m.exercise_id = ?
+                WHERE ws.id = ? AND m.id = ?
+                """,
+                (exercise_id, session_id, machine_id),
+            ).fetchone()
+            if valid_machine is None:
+                raise ValueError("The selected machine does not belong to this gym and exercise.")
+            connection.execute(
+                """
+                INSERT INTO session_exercise_machines(session_id, exercise_id, machine_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id, exercise_id)
+                DO UPDATE SET machine_id = excluded.machine_id
+                """,
+                (session_id, exercise_id, machine_id),
+            )
         connection.execute(
             "DELETE FROM workout_sets WHERE session_id = ? AND exercise_id = ?",
             (session_id, exercise_id),

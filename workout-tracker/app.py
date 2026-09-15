@@ -655,7 +655,7 @@ def settings_page() -> None:
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title(
             "Machine settings",
-            "Save equipment adjustments for each gym and exercise. Reusing a name updates its value.",
+            "Add the available machines for each exercise, then save their adjustments.",
         )
         gyms = db.list_gyms()
         exercises = db.list_exercises()
@@ -665,44 +665,254 @@ def settings_page() -> None:
 
         gym = ui.select(options(gyms), label="Gym").classes("w-full")
         exercise = ui.select(options(exercises), label="Exercise").classes("w-full")
-        setting_name = ui.input("Setting name (for example Seat)").classes("w-full")
-        setting_value = ui.input("Value (for example 4)").classes("w-full")
+        machine_name = ui.input("Machine name (for example Cable station 1)").classes("w-full")
 
-        def save_setting() -> None:
+        def create_machine() -> None:
             if gym.value is None or exercise.value is None:
                 ui.notify("Select a gym and exercise.", type="warning")
                 return
-            if not setting_name.value or not setting_name.value.strip():
-                ui.notify("A setting name is required.", type="warning")
+            if not machine_name.value or not machine_name.value.strip():
+                ui.notify("A machine name is required.", type="warning")
                 return
-            if setting_value.value is None or not str(setting_value.value).strip():
-                ui.notify("A value is required.", type="warning")
+            try:
+                db.add_machine(int(gym.value), int(exercise.value), machine_name.value)
+            except (sqlite3.IntegrityError, ValueError) as error:
+                notify_database_error(error)
                 return
-            db.save_machine_setting(
-                int(gym.value),
-                int(exercise.value),
-                setting_name.value,
-                str(setting_value.value),
-            )
             ui.navigate.reload()
 
-        ui.button("Save setting", on_click=save_setting).classes("mobile-full-button")
+        ui.button("Add machine", icon="add", on_click=create_machine).classes(
+            "mobile-full-button"
+        )
         ui.separator().classes("my-4")
-        for setting in db.list_machine_settings():
-            with ui.row().classes(
-                "settings-list-row w-full items-center border-b border-grey-3 py-2"
-            ):
-                ui.label(f'{setting["gym_name"]} · {setting["exercise_name"]}').classes(
-                    "setting-identity font-medium w-72"
-                )
-                ui.label(f'{setting["setting_name"]}: {setting["setting_value"]}')
-                ui.space()
+        machines = db.list_machines()
+        if not machines:
+            ui.label("No machines added yet.").classes("text-grey-7")
+        for machine in machines:
+            with ui.card().classes("w-full"):
+                with ui.row().classes("management-row w-full items-center"):
+                    with ui.column().classes("gap-0"):
+                        ui.label(machine["name"]).classes("text-h6")
+                        ui.label(
+                            f'{machine["gym_name"]} · {machine["exercise_name"]}'
+                        ).classes("text-sm text-grey-7")
+                    ui.space()
 
-                def remove_setting(setting_id: int = setting["id"]) -> None:
-                    db.delete_machine_setting(setting_id)
+                    def remove_machine(machine_id: int = machine["id"]) -> None:
+                        try:
+                            db.delete_machine(machine_id)
+                        except (sqlite3.IntegrityError, ValueError) as error:
+                            notify_database_error(error)
+                            return
+                        ui.navigate.reload()
+
+                    ui.button(icon="delete", on_click=remove_machine).props(
+                        "flat round color=negative aria-label='Delete machine'"
+                    )
+
+                settings = db.list_machine_settings(machine["id"])
+                if settings:
+                    for setting in settings:
+                        with ui.row().classes(
+                            "settings-list-row w-full items-center border-b border-grey-3 py-2"
+                        ):
+                            ui.label(
+                                f'{setting["setting_name"]}: {setting["setting_value"]}'
+                            ).classes("setting-identity")
+                            ui.space()
+
+                            def remove_setting(setting_id: int = setting["id"]) -> None:
+                                db.delete_machine_setting(setting_id)
+                                ui.navigate.reload()
+
+                            ui.button(icon="close", on_click=remove_setting).props(
+                                "flat round dense aria-label='Delete setting'"
+                            )
+                else:
+                    ui.label("No adjustments saved.").classes("text-grey-6")
+
+                with ui.row().classes("template-add-fields w-full items-end"):
+                    updated_machine_name = ui.input(
+                        "Machine name",
+                        value=machine["name"],
+                    ).classes("flex-1 min-w-48")
+
+                    def save_machine_name(
+                        machine_id: int = machine["id"],
+                        name_input=updated_machine_name,
+                    ) -> None:
+                        if not name_input.value or not name_input.value.strip():
+                            ui.notify("A machine name is required.", type="warning")
+                            return
+                        try:
+                            db.rename_machine(machine_id, name_input.value)
+                        except (sqlite3.IntegrityError, ValueError) as error:
+                            notify_database_error(error)
+                            return
+                        ui.navigate.reload()
+
+                    ui.button("Rename", icon="edit", on_click=save_machine_name).props("flat")
+
+                with ui.row().classes("template-add-fields w-full items-end"):
+                    setting_name = ui.input(
+                        "Setting name (for example Seat)"
+                    ).classes("flex-1 min-w-48")
+                    setting_value = ui.input("Value (for example 4)").classes(
+                        "flex-1 min-w-40"
+                    )
+
+                def save_setting(
+                    machine_id: int = machine["id"],
+                    name_input=setting_name,
+                    value_input=setting_value,
+                ) -> None:
+                    if not name_input.value or not name_input.value.strip():
+                        ui.notify("A setting name is required.", type="warning")
+                        return
+                    if value_input.value is None or not str(value_input.value).strip():
+                        ui.notify("A value is required.", type="warning")
+                        return
+                    db.save_machine_setting(
+                        machine_id,
+                        name_input.value,
+                        str(value_input.value),
+                    )
                     ui.navigate.reload()
 
-                ui.button(icon="delete", on_click=remove_setting).props("flat round color=negative")
+                ui.button("Save adjustment", icon="save", on_click=save_setting).props(
+                    "flat"
+                ).classes("mobile-full-button")
+
+
+def workout_exercise_card(session: dict, item: dict) -> None:
+    session_id = int(session["id"])
+    gym_id = int(session["gym_id"])
+    exercise_id = int(item["exercise_id"])
+    machines = db.list_machines(gym_id, exercise_id)
+    machine_ids = {int(machine["id"]) for machine in machines}
+    selected_machine_id = db.suggested_machine(session_id, gym_id, exercise_id)
+    if selected_machine_id not in machine_ids:
+        selected_machine_id = int(machines[0]["id"]) if machines else None
+
+    with ui.card().classes("w-full"):
+        ui.label(item["exercise_name"]).classes("text-h6")
+        ui.label(
+            f'Target: {item["target_sets"]} sets × {item["target_reps"]} reps'
+        ).classes("text-grey-7")
+
+        @ui.refreshable
+        def machine_details(machine_id: int | None) -> None:
+            machine = next(
+                (entry for entry in machines if int(entry["id"]) == machine_id),
+                None,
+            )
+            settings = db.list_machine_settings(machine_id) if machine_id is not None else []
+            if settings:
+                ui.label("Machine settings").classes("font-medium mt-2")
+                ui.label(
+                    " · ".join(
+                        f'{setting["setting_name"]}: {setting["setting_value"]}'
+                        for setting in settings
+                    )
+                )
+            elif machine is not None:
+                ui.label("No adjustments saved for this machine.").classes("text-grey-6")
+            else:
+                ui.label("No machine saved for this gym and exercise.").classes("text-grey-6")
+
+            previous_session, old_sets = db.previous_sets(
+                session_id, gym_id, exercise_id, machine_id
+            )
+            if previous_session:
+                previous_date = datetime.fromisoformat(previous_session["started_at"]).strftime(
+                    "%Y-%m-%d"
+                )
+                previous_label = (
+                    f'Last time on {machine["name"]} ({previous_date})'
+                    if machine is not None
+                    else f"Last time here ({previous_date})"
+                )
+                ui.label(previous_label).classes("font-medium mt-2")
+                ui.label(
+                    " · ".join(f'{old_set["weight"]:g} kg × {old_set["reps"]}' for old_set in old_sets)
+                ).classes("text-grey-7")
+            elif machine is not None:
+                ui.label("No previous sets recorded on this machine.").classes("text-grey-6")
+            else:
+                ui.label("No previous sets recorded at this gym.").classes("text-grey-6")
+
+            current_sets = db.list_session_sets(session_id, exercise_id)
+            set_inputs: list[tuple] = []
+            for set_number in range(1, item["target_sets"] + 1):
+                saved = next(
+                    (saved_set for saved_set in current_sets if saved_set["set_number"] == set_number),
+                    None,
+                )
+                previous = next(
+                    (old_set for old_set in old_sets if old_set["set_number"] == set_number),
+                    None,
+                )
+                with ui.row().classes("set-entry-row items-center"):
+                    ui.label(f"Set {set_number}").classes("set-number w-14")
+                    weight = ui.number(
+                        "Weight (kg)",
+                        value=saved["weight"] if saved else (
+                            previous["weight"] if previous else None
+                        ),
+                        min=0,
+                        step=0.5,
+                    ).classes("w-40")
+                    reps = ui.number(
+                        "Reps",
+                        value=saved["reps"] if saved else (
+                            previous["reps"] if previous else None
+                        ),
+                        min=0,
+                        step=1,
+                    ).classes("w-32")
+                    set_inputs.append((set_number, weight, reps))
+
+            def save_sets(inputs: list[tuple] = set_inputs) -> None:
+                completed: list[tuple[int, float, int]] = []
+                for set_number, weight_input, reps_input in inputs:
+                    if weight_input.value is None and reps_input.value is None:
+                        continue
+                    if weight_input.value is None or reps_input.value is None:
+                        ui.notify("Enter both weight and reps for each set.", type="warning")
+                        return
+                    completed.append(
+                        (set_number, float(weight_input.value), int(reps_input.value))
+                    )
+                db.save_exercise_sets(
+                    session_id,
+                    exercise_id,
+                    completed,
+                    machine_id,
+                )
+                ui.notify("Sets saved", type="positive")
+
+            ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
+                "save-sets-button"
+            )
+
+        def choose_machine(event) -> None:
+            if event.value is None:
+                return
+            machine_id = int(event.value)
+            db.set_session_machine(session_id, exercise_id, machine_id)
+            machine_details.refresh(machine_id)
+
+        if len(machines) > 1:
+            ui.select(
+                options(machines),
+                label="Machine",
+                value=selected_machine_id,
+                on_change=choose_machine,
+            ).classes("w-full mt-2")
+        elif len(machines) == 1:
+            ui.label(f'Machine: {machines[0]["name"]}').classes("font-medium mt-2")
+
+        machine_details(selected_machine_id)
 
 
 @ui.page("/session/{session_id}")
@@ -724,74 +934,7 @@ def session_page(session_id: int) -> None:
             ui.label("This template has no exercises yet.").classes("text-orange-8")
 
         for item in template_items:
-            with ui.card().classes("w-full"):
-                ui.label(item["exercise_name"]).classes("text-h6")
-                ui.label(
-                    f'Target: {item["target_sets"]} sets × {item["target_reps"]} reps'
-                ).classes("text-grey-7")
-
-                settings = db.list_machine_settings(session["gym_id"], item["exercise_id"])
-                if settings:
-                    ui.label("Machine settings").classes("font-medium mt-2")
-                    ui.label(" · ".join(f'{s["setting_name"]}: {s["setting_value"]}' for s in settings))
-                else:
-                    ui.label("No machine settings saved for this gym.").classes("text-grey-6")
-
-                previous_session, old_sets = db.previous_sets(
-                    session_id, session["gym_id"], item["exercise_id"]
-                )
-                if previous_session:
-                    previous_date = datetime.fromisoformat(previous_session["started_at"]).strftime(
-                        "%Y-%m-%d"
-                    )
-                    ui.label(f"Last time here ({previous_date})").classes("font-medium mt-2")
-                    ui.label(
-                        " · ".join(f'{s["weight"]:g} kg × {s["reps"]}' for s in old_sets)
-                    ).classes("text-grey-7")
-                else:
-                    ui.label("No previous sets recorded at this gym.").classes("text-grey-6")
-
-                current_sets = db.list_session_sets(session_id, item["exercise_id"])
-                set_inputs: list[tuple] = []
-                for set_number in range(1, item["target_sets"] + 1):
-                    saved = next((s for s in current_sets if s["set_number"] == set_number), None)
-                    previous = next((s for s in old_sets if s["set_number"] == set_number), None)
-                    with ui.row().classes("set-entry-row items-center"):
-                        ui.label(f"Set {set_number}").classes("set-number w-14")
-                        weight = ui.number(
-                            "Weight (kg)",
-                            value=saved["weight"] if saved else (previous["weight"] if previous else None),
-                            min=0,
-                            step=0.5,
-                        ).classes("w-40")
-                        reps = ui.number(
-                            "Reps",
-                            value=saved["reps"] if saved else (previous["reps"] if previous else None),
-                            min=0,
-                            step=1,
-                        ).classes("w-32")
-                        set_inputs.append((set_number, weight, reps))
-
-                def save_sets(
-                    exercise_id: int = item["exercise_id"],
-                    inputs: list[tuple] = set_inputs,
-                ) -> None:
-                    completed: list[tuple[int, float, int]] = []
-                    for set_number, weight_input, reps_input in inputs:
-                        if weight_input.value is None and reps_input.value is None:
-                            continue
-                        if weight_input.value is None or reps_input.value is None:
-                            ui.notify("Enter both weight and reps for each set.", type="warning")
-                            return
-                        completed.append(
-                            (set_number, float(weight_input.value), int(reps_input.value))
-                        )
-                    db.save_exercise_sets(session_id, exercise_id, completed)
-                    ui.notify("Sets saved", type="positive")
-
-                ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
-                    "save-sets-button"
-                )
+            workout_exercise_card(session, item)
 
         notes = ui.textarea("Workout notes (optional)").classes("w-full")
 

@@ -8,9 +8,10 @@ SQLite-compatible libSQL service.
 
 - Add gyms and exercises.
 - Build reusable workout templates such as Push A or Leg Day.
-- Store several machine adjustments for every gym/exercise combination.
+- Add multiple named machines for the same exercise at each gym.
+- Store separate adjustments and workout history for every machine.
 - Start a workout by choosing a gym and template.
-- See the machine settings and the weight/reps used during the previous session at that gym.
+- Choose an available machine during the workout and see its settings and previous weight/reps.
 - Record sets, finish sessions, and browse recent workout history.
 - Switch between the original light theme and a charcoal dark theme with orange-red accents.
 
@@ -62,12 +63,18 @@ database module, making the SQL visible and easy to learn.
 - `exercises`: reusable movements.
 - `workout_templates`: named workout days.
 - `template_exercises`: ordered exercises and targets within a template.
-- `machine_settings`: flexible name/value adjustments scoped to a gym and exercise.
+- `machine_settings`: retained legacy settings used by the safe one-time migration.
+- `machines`: named machine choices scoped to a gym and exercise.
+- `machine_adjustments`: flexible name/value adjustments for one machine.
 - `workout_sessions`: dated instances of a template performed at a gym.
 - `workout_sets`: weight and reps recorded for an exercise in a session.
+- `session_exercise_machines`: the machine selected for each exercise in a session.
+- `schema_migrations`: records completed, restart-safe database migrations.
 
 Templates are independent from gyms. This means one Push A template can be used everywhere,
 while the machine settings shown during the workout change with the selected gym.
+Existing installations are migrated additively: previous settings are copied to a renameable
+**Default machine**, and the original settings table and workout records are not deleted.
 
 ## Deploy on Render
 
