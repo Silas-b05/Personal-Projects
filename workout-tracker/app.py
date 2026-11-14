@@ -3,14 +3,19 @@ from __future__ import annotations
 import os
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
-from nicegui import app, ui
+from nicegui import app, run, ui
 
 import database as db
+import workout_recovery as recovery
 
 
 db.initialize_database()
+
+ui.add_head_html('<script>' + Path(__file__).with_name('workout_recovery.js').read_text()
+                 + '</script>', shared=True)
 
 ui.add_head_html(
     """
@@ -784,7 +789,7 @@ def settings_page() -> None:
                 ).classes("mobile-full-button")
 
 
-def workout_exercise_card(session: dict, item: dict) -> None:
+def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
     session_id = int(session["id"])
     gym_id = int(session["gym_id"])
     exercise_id = int(item["exercise_id"])
@@ -793,6 +798,7 @@ def workout_exercise_card(session: dict, item: dict) -> None:
     selected_machine_id = db.suggested_machine(session_id, gym_id, exercise_id)
     if selected_machine_id not in machine_ids:
         selected_machine_id = int(machines[0]["id"]) if machines else None
+    machine_select = None
 
     with ui.card().classes("w-full"):
         ui.label(item["exercise_name"]).classes("text-h6")
@@ -801,7 +807,8 @@ def workout_exercise_card(session: dict, item: dict) -> None:
         ).classes("text-grey-7")
 
         @ui.refreshable
-        def machine_details(machine_id: int | None) -> None:
+        def machine_details(machine_id: int | None, draft_values: dict) -> None:
+            scope = f'{session_id}:{exercise_id}:{machine_id}:'
             machine = next(
                 (entry for entry in machines if int(entry["id"]) == machine_id),
                 None,
@@ -870,40 +877,66 @@ def workout_exercise_card(session: dict, item: dict) -> None:
                         min=0,
                         step=1,
                     ).classes("w-32")
+                    for field, control in [('weight', weight), ('reps', reps)]:
+                        key = f'{scope}{set_number}:{field}'
+                        control.set_value(recovery.number_value(draft_values, key, control.value))
+                        recovery.remember(control, key)
                     set_inputs.append((set_number, weight, reps))
 
-            def save_sets(inputs: list[tuple] = set_inputs) -> None:
+            async def save_sets(inputs: list[tuple] = set_inputs) -> None:
+                save_button.disable()
+                if machine_select is not None:
+                    machine_select.disable()
+                try:
+                    await persist_sets(inputs)
+                except Exception:
+                    ui.notify('Could not confirm save. Your device draft is retained; retry when connected.',
+                              type='negative')
+                finally:
+                    save_button.enable()
+                    if machine_select is not None:
+                        machine_select.enable()
+
+            async def persist_sets(inputs: list[tuple]) -> None:
+                snapshot = await recovery.read_drafts(scope)
                 completed: list[tuple[int, float, int]] = []
                 for set_number, weight_input, reps_input in inputs:
-                    if weight_input.value is None and reps_input.value is None:
+                    weight = recovery.number_value(snapshot, f'{scope}{set_number}:weight', weight_input.value)
+                    reps = recovery.number_value(snapshot, f'{scope}{set_number}:reps', reps_input.value)
+                    if weight is None and reps is None:
                         continue
-                    if weight_input.value is None or reps_input.value is None:
+                    if weight is None or reps is None:
                         ui.notify("Enter both weight and reps for each set.", type="warning")
                         return
+                    if weight < 0 or reps < 0 or int(reps) != reps:
+                        ui.notify('Use non-negative weight and whole-number reps.', type='warning')
+                        return
                     completed.append(
-                        (set_number, float(weight_input.value), int(reps_input.value))
+                        (set_number, float(weight), int(reps))
                     )
-                db.save_exercise_sets(
+                await run.io_bound(db.save_exercise_sets,
                     session_id,
                     exercise_id,
                     completed,
                     machine_id,
                 )
+                await recovery.acknowledge(snapshot)
                 ui.notify("Sets saved", type="positive")
 
-            ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
+            save_button = ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
                 "save-sets-button"
             )
 
-        def choose_machine(event) -> None:
+        async def choose_machine(event) -> None:
             if event.value is None:
                 return
             machine_id = int(event.value)
-            db.set_session_machine(session_id, exercise_id, machine_id)
-            machine_details.refresh(machine_id)
+            latest_drafts = await recovery.read_drafts(f'{session_id}:')
+            await run.io_bound(db.set_session_machine, session_id, exercise_id, machine_id)
+            machine_details.refresh(machine_id, latest_drafts)
 
         if len(machines) > 1:
-            ui.select(
+            machine_select = ui.select(
                 options(machines),
                 label="Machine",
                 value=selected_machine_id,
@@ -912,12 +945,14 @@ def workout_exercise_card(session: dict, item: dict) -> None:
         elif len(machines) == 1:
             ui.label(f'Machine: {machines[0]["name"]}').classes("font-medium mt-2")
 
-        machine_details(selected_machine_id)
+        machine_details(selected_machine_id, drafts)
 
 
-@ui.page("/session/{session_id}")
-def session_page(session_id: int) -> None:
+@ui.page("/session/{session_id}", reconnect_timeout=900)
+async def session_page(session_id: int) -> None:
     navigation()
+    await ui.context.client.connected()
+    drafts = await recovery.read_drafts(f'{session_id}:')
     session = db.get_session(session_id)
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         if session is None:
@@ -934,12 +969,20 @@ def session_page(session_id: int) -> None:
             ui.label("This template has no exercises yet.").classes("text-orange-8")
 
         for item in template_items:
-            workout_exercise_card(session, item)
+            workout_exercise_card(session, item, drafts)
 
-        notes = ui.textarea("Workout notes (optional)").classes("w-full")
+        ui.label('Unfinished entries are kept on this device. Tap Save sets to save them to your workout.').classes(
+            'workout-draft-status text-sm text-grey-7')
+        note_key = f'{session_id}:notes'
+        notes = ui.textarea("Workout notes (optional)",
+                            value=drafts.get(note_key, {}).get('value', session['notes'])).classes("w-full")
+        recovery.remember(notes, note_key)
 
-        def complete_workout() -> None:
-            db.finish_session(session_id, notes.value or "")
+        async def complete_workout() -> None:
+            pending = await recovery.read_drafts(f'{session_id}:')
+            await run.io_bound(db.finish_session, session_id,
+                               pending.get(note_key, {}).get('value', notes.value) or '')
+            await recovery.acknowledge({key: value for key, value in pending.items() if key == note_key})
             ui.notify("Workout completed", type="positive")
             ui.navigate.to("/history")
 

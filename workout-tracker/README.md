@@ -42,6 +42,17 @@ layout accounts for the iPhone safe areas and provides a fixed bottom navigation
 access during workouts. Keep the computer running the app and the iPhone on a network that can
 reach it.
 
+Workout pages keep their connection state for up to 15 minutes after a disconnect,
+so normal screen-lock breaks can reconnect without rebuilding the page. Returning
+to the page also retries a suspended connection. Server restarts or longer breaks
+can still require a reload.
+
+Unfinished weights, reps and notes are stored in this browser on this device and
+restored after a reload. Set drafts are separated by session, exercise and machine.
+**Save sets** still commits to Turso; a draft is not a confirmed database save.
+Successful saves clear only the acknowledged draft, preserving newer edits made
+while a save was in progress. Clearing browser data also clears device drafts.
+
 ## Project structure
 
 ```text
