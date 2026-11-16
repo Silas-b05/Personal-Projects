@@ -238,10 +238,14 @@ def list_machines(
     )
 
 
-def machines_for_settings(exercise_id: int) -> list[dict[str, Any]]:
-    """Load only the chosen exercise's machines and adjustments in one query."""
+def machines_for_settings(
+    exercise_id: int, gym_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Load matching machines and adjustments in one query, optionally by gym."""
+    gym_condition = "AND m.gym_id = ?" if gym_id is not None else ""
+    parameters = (exercise_id, gym_id) if gym_id is not None else (exercise_id,)
     rows = _rows(
-        """
+        f"""
         SELECT m.*, g.name AS gym_name, e.name AS exercise_name,
                ma.id AS adjustment_id, ma.setting_name, ma.setting_value
         FROM machines AS m
@@ -249,10 +253,11 @@ def machines_for_settings(exercise_id: int) -> list[dict[str, Any]]:
         JOIN exercises AS e ON e.id = m.exercise_id
         LEFT JOIN machine_adjustments AS ma ON ma.machine_id = m.id
         WHERE m.exercise_id = ?
+        {gym_condition}
         ORDER BY g.name COLLATE NOCASE, m.name COLLATE NOCASE, m.id,
                  ma.setting_name COLLATE NOCASE
         """,
-        (exercise_id,),
+        parameters,
     )
     machines: dict[int, dict[str, Any]] = {}
     for row in rows:

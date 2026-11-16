@@ -44,6 +44,23 @@ class MachineFilterTests(unittest.TestCase):
         self.assertEqual(db.machines_for_settings(3), [])
         self.assertEqual(db.machines_for_settings(999), [])
 
+    def test_combined_gym_filter_still_uses_one_read_only_query(self):
+        before = self.connection.total_changes
+        with patch.object(db, "_rows", wraps=db._rows) as query:
+            machines = db.machines_for_settings(1, 2)
+            query.assert_called_once()
+        self.connect.assert_called_once()
+        self.assertEqual([m["id"] for m in machines], [2])
+        self.assertEqual(machines[0]["settings"], [])
+        self.assertEqual(self.connection.total_changes, before)
+
+    def test_switch_gym_clear_gym_and_no_matches(self):
+        self.assertEqual([m["id"] for m in db.machines_for_settings(1, 1)], [1])
+        self.assertEqual([m["id"] for m in db.machines_for_settings(1, None)], [1, 2])
+        self.assertEqual(db.machines_for_settings(2, 2), [])
+        self.assertEqual(db.machines_for_settings(1, 999), [])
+        self.assertEqual(db.machines_for_settings(999, 1), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -191,6 +191,26 @@ ui.add_head_html(
         }
 
         @media (max-width: 760px) {
+            /* Keep searchable filter dialogs clear of the iPhone status bar.
+               Only these two filters are affected, not other app dialogs. */
+            @layer overrides {
+                .q-dialog__inner:has(.machine-filter-input) {
+                    top: calc(env(safe-area-inset-top, 0px) + 8vh) !important;
+                    top: calc(env(safe-area-inset-top, 0px) + 8dvh) !important;
+                    padding-left: max(16px, env(safe-area-inset-left, 0px)) !important;
+                    padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
+                }
+
+                .q-dialog__inner:has(.machine-filter-input) > .q-select__dialog {
+                    border-radius: var(--app-radius) !important;
+                    /* Retain Quasar's iOS keyboard-aware height and scrolling. */
+                }
+            }
+
+            .q-select__dialog .machine-filter-input {
+                font-size: 16px; /* Avoid Safari's input-focus zoom. */
+            }
+
             .nicegui-content {
                 padding-left: 0 !important;
                 padding-right: 0 !important;
@@ -685,6 +705,7 @@ async def settings_page() -> None:
                 notify_database_error(error)
                 return
             app.storage.user["settings_exercise_filter"] = int(exercise.value)
+            app.storage.user["settings_gym_filter"] = int(gym.value)
             ui.navigate.reload()
 
         ui.button("Add machine", icon="add", on_click=create_machine).classes(
@@ -701,7 +722,17 @@ async def settings_page() -> None:
             label="Filter machines by exercise",
             value=saved_filter,
             with_input=True,
-        ).props("clearable").classes("w-full")
+        ).props("clearable input-class=machine-filter-input").classes("w-full")
+        gym_options = {0: "All gyms", **options(gyms)}
+        saved_gym = app.storage.user.get("settings_gym_filter", 0)
+        if saved_gym not in gym_options:
+            saved_gym = 0
+        gym_filter = ui.select(
+            gym_options,
+            label="Filter machines by gym",
+            value=saved_gym,
+            with_input=True,
+        ).props("input-class=machine-filter-input").classes("w-full")
         machine_list = ui.column().classes("w-full")
         request_number = 0
 
@@ -710,7 +741,9 @@ async def settings_page() -> None:
             request_number += 1
             current_request = request_number
             selected = exercise_filter.value
+            selected_gym = gym_filter.value or None
             app.storage.user["settings_exercise_filter"] = selected
+            app.storage.user["settings_gym_filter"] = selected_gym or 0
             machine_list.clear()
             with machine_list:
                 if selected is None:
@@ -718,7 +751,9 @@ async def settings_page() -> None:
                     return
                 ui.spinner()
             try:
-                machines = await run.io_bound(db.machines_for_settings, int(selected))
+                machines = await run.io_bound(
+                    db.machines_for_settings, int(selected), selected_gym,
+                )
             except Exception:
                 if current_request == request_number:
                     machine_list.clear()
@@ -732,10 +767,11 @@ async def settings_page() -> None:
             machine_list.clear()
             with machine_list:
                 if not machines:
-                    ui.label("No machines saved for this exercise yet.").classes("text-grey-7")
+                    ui.label("No machines match the selected exercise and gym.").classes("text-grey-7")
                 settings_machine_cards(machines)
 
         exercise_filter.on_value_change(load_machines)
+        gym_filter.on_value_change(load_machines)
         await load_machines()
 
 
