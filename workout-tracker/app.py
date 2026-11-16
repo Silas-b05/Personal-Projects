@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from datetime import datetime
@@ -22,7 +23,8 @@ ui.add_head_html(
     <script>
         (() => {
             const key = 'workout-tracker-dark-mode';
-            const isDark = localStorage.getItem(key) === 'true';
+            let isDark = true;
+            try { isDark = localStorage.getItem(key) !== 'false'; } catch (_) {}
             document.documentElement.classList.toggle('workout-dark-bootstrap', isDark);
             document.documentElement.style.backgroundColor = isDark ? '#0b0b0d' : '';
         })();
@@ -389,7 +391,7 @@ ui.add_head_html(
 
 
 def navigation() -> None:
-    app.storage.user.setdefault("dark_mode", False)
+    app.storage.user.setdefault("dark_mode", True)
     dark_mode = ui.dark_mode(app.storage.user["dark_mode"]).bind_value(
         app.storage.user, "dark_mode"
     )
@@ -573,6 +575,90 @@ def exercises_page() -> None:
     )
 
 
+def template_exercise_list(template_id: int) -> None:
+    items = db.list_template_exercises(template_id)
+    if not items:
+        ui.label("No exercises in this template yet.").classes("text-grey-7")
+        return
+
+    ui.label("Drag the grab handle to reorder. Changes save after each drop.").classes(
+        "text-sm text-grey-7"
+    )
+    saved_order = [item["id"] for item in items]
+    item_ids: dict[int, int] = {}
+    labels: dict[int, tuple] = {}
+    remove_buttons = []
+    save_lock = asyncio.Lock()
+    failed = False
+    status = ui.label().classes("text-sm text-grey-7").props("role=status aria-live=polite")
+    with ui.column().classes("w-full gap-0") as exercise_list:
+        for item in items:
+            with ui.row().classes("w-full items-center border-b border-grey-3 py-2").style(
+                "display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 8px"
+            ) as row:
+                item_ids[row.id] = item["id"]
+                ui.icon("drag_indicator").classes(
+                    "template-drag-handle cursor-grab active:cursor-grabbing"
+                ).style(
+                    "touch-action: none; user-select: none; min-height: 48px; width: 48px; font-size: 24px; "
+                    "display: flex; align-items: center; justify-content: center"
+                ).props("aria-label='Drag to reorder exercise'")
+                with ui.column().classes("gap-0 min-w-0"):
+                    label = ui.label(f'{item["position"]}. {item["exercise_name"]}')
+                    labels[item["id"]] = (label, item["exercise_name"])
+                    ui.label(f'{item["target_sets"]} sets × {item["target_reps"]} reps').classes(
+                        "text-grey-7"
+                    )
+
+                def remove_item(item_id: int = item["id"]) -> None:
+                    db.remove_template_exercise(item_id)
+                    ui.navigate.reload()
+
+                remove_buttons.append(ui.button(icon="close", on_click=remove_item).props(
+                    "flat round aria-label='Remove exercise from template'"
+                ))
+
+    async def save_order(event) -> None:
+        nonlocal saved_order, failed
+        if event.old_index == event.new_index or failed:
+            return
+        # NiceGUI synchronizes the container's child order before this callback.
+        requested = [item_ids[row.id] for row in exercise_list]
+        sortable.disable()
+        for button in remove_buttons:
+            button.disable()
+        async with save_lock:
+            if failed:
+                return
+            status.set_text("Saving order…")
+            try:
+                await run.io_bound(db.reorder_template_exercises,
+                                   template_id, requested, saved_order.copy())
+            except Exception:
+                # A timeout may mean the commit succeeded. Do not claim or retry
+                # a different order until the page has read the database again.
+                failed = True
+                status.set_text("Could not confirm order. Reload to check the saved order.")
+                retry.set_visibility(True)
+                return
+            saved_order = requested
+            for position, item_id in enumerate(saved_order, 1):
+                label, name = labels[item_id]
+                label.set_text(f"{position}. {name}")
+            status.set_text("Order saved")
+            sortable.enable()
+            for button in remove_buttons:
+                button.enable()
+
+    sortable = exercise_list.make_sortable(
+        on_end=save_order,
+        handle=".template-drag-handle",
+        options={"forceFallback": True, "fallbackTolerance": 4},
+    )
+    retry = ui.button("Reload saved order", icon="refresh", on_click=ui.navigate.reload).props("flat")
+    retry.set_visibility(False)
+
+
 @ui.page("/templates")
 def templates_page() -> None:
     navigation()
@@ -619,24 +705,7 @@ def templates_page() -> None:
                         "flat round color=negative"
                     )
 
-                template_items = db.list_template_exercises(template["id"])
-                for item in template_items:
-                    with ui.row().classes(
-                        "template-item-row w-full items-center border-b border-grey-3 py-2"
-                    ):
-                        ui.label(f'{item["position"]}. {item["exercise_name"]}')
-                        ui.label(f'{item["target_sets"]} sets × {item["target_reps"]} reps').classes(
-                            "template-item-target text-grey-7"
-                        )
-                        ui.space()
-
-                        def remove_item(item_id: int = item["id"]) -> None:
-                            db.remove_template_exercise(item_id)
-                            ui.navigate.reload()
-
-                        ui.button(icon="close", on_click=remove_item).props(
-                            "flat round dense"
-                        ).classes("template-item-remove")
+                template_exercise_list(template["id"])
 
                 if not exercises:
                     ui.label("Add exercises before filling this template.").classes("text-orange-8")

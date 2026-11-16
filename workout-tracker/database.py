@@ -192,8 +192,48 @@ def add_template_exercise(
         return int(row[0])
 
 
+def _write_template_order(connection: Any, template_id: int, ordered_ids: list[int]) -> None:
+    """Use unused temporary positions to avoid the unique-position constraint."""
+    if not ordered_ids:
+        return
+    minimum = connection.execute(
+        "SELECT MIN(position) FROM template_exercises WHERE template_id = ?",
+        (template_id,),
+    ).fetchone()[0]
+    temporary_start = min(0, minimum) - len(ordered_ids)
+    cases = " ".join("WHEN ? THEN ?" for _ in ordered_ids)
+    for start in (temporary_start, 1):
+        parameters = [value for index, item_id in enumerate(ordered_ids)
+                      for value in (item_id, start + index)]
+        connection.execute(
+            f"UPDATE template_exercises SET position = CASE id {cases} ELSE position END "
+            "WHERE template_id = ?",
+            (*parameters, template_id),
+        )
+
+
+def reorder_template_exercises(
+    template_id: int, ordered_ids: list[int], expected_ids: list[int],
+) -> None:
+    """Atomically reorder existing items, rejecting stale or incomplete lists."""
+    with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current_ids = [row[0] for row in connection.execute(
+            "SELECT id FROM template_exercises WHERE template_id = ? ORDER BY position",
+            (template_id,),
+        ).fetchall()]
+        if current_ids != expected_ids:
+            raise ValueError("This template changed elsewhere. Reload before reordering.")
+        if len(ordered_ids) != len(current_ids) or set(ordered_ids) != set(current_ids):
+            raise ValueError("The new order must contain every exercise exactly once.")
+        if current_ids != ordered_ids:
+            _write_template_order(connection, template_id, ordered_ids)
+        connection.commit()
+
+
 def remove_template_exercise(template_exercise_id: int) -> None:
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT template_id, position FROM template_exercises WHERE id = ?",
             (template_exercise_id,),
@@ -201,14 +241,11 @@ def remove_template_exercise(template_exercise_id: int) -> None:
         if row is None:
             return
         connection.execute("DELETE FROM template_exercises WHERE id = ?", (template_exercise_id,))
-        connection.execute(
-            """
-            UPDATE template_exercises
-            SET position = position - 1
-            WHERE template_id = ? AND position > ?
-            """,
-            (row[0], row[1]),
-        )
+        remaining_ids = [item[0] for item in connection.execute(
+            "SELECT id FROM template_exercises WHERE template_id = ? ORDER BY position",
+            (row[0],),
+        ).fetchall()]
+        _write_template_order(connection, row[0], remaining_ids)
         connection.commit()
 
 
