@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import libsql
 
@@ -14,7 +16,8 @@ DEFAULT_MACHINE_NAME = "Default machine"
 MACHINE_MIGRATION_NAME = "add_multiple_machines_v1"
 
 
-def connect() -> Any:
+@contextmanager
+def connect() -> Iterator[Any]:
     database_url = os.environ.get("TURSO_DATABASE_URL")
     auth_token = os.environ.get("TURSO_AUTH_TOKEN")
     if not database_url or not auth_token:
@@ -22,8 +25,12 @@ def connect() -> Any:
             "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must both be set."
         )
     connection = libsql.connect(database=database_url, auth_token=auth_token)
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    try:
+        with connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            yield connection
+    finally:
+        connection.close()
 
 
 def initialize_database() -> None:
@@ -94,9 +101,16 @@ def _migrate_legacy_machine_data(connection: Any) -> None:
 
 def _rows(query: str, parameters: Iterable[Any] = ()) -> list[dict[str, Any]]:
     with connect() as connection:
-        cursor = connection.execute(query, tuple(parameters))
+        return _query_rows(connection, query, parameters)
+
+
+def _query_rows(connection: Any, query: str, parameters: Iterable[Any] = ()) -> list[dict[str, Any]]:
+    cursor = connection.execute(query, tuple(parameters))
+    try:
         columns = [description[0] for description in cursor.description or ()]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        cursor.close()
 
 
 def _execute(query: str, parameters: Iterable[Any] = ()) -> int:
@@ -173,23 +187,14 @@ def add_template_exercise(
     target_sets: int,
     target_reps: str,
 ) -> int:
-    with connect() as connection:
-        position = connection.execute(
-            "SELECT COALESCE(MAX(position), 0) + 1 FROM template_exercises WHERE template_id = ?",
-            (template_id,),
-        ).fetchone()[0]
-        cursor = connection.execute(
-            """
-            INSERT INTO template_exercises(
-                template_id, exercise_id, position, target_sets, target_reps
-            ) VALUES (?, ?, ?, ?, ?) RETURNING id
-            """,
-            (template_id, exercise_id, position, target_sets, target_reps.strip()),
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        connection.commit()
-        return int(row[0])
+    return _execute(
+        """
+        INSERT INTO template_exercises(template_id, exercise_id, position, target_sets, target_reps)
+        SELECT ?, ?, COALESCE(MAX(position), 0) + 1, ?, ?
+        FROM template_exercises WHERE template_id = ? RETURNING id
+        """,
+        (template_id, exercise_id, target_sets, target_reps.strip(), template_id),
+    )
 
 
 def _write_template_order(connection: Any, template_id: int, ordered_ids: list[int]) -> None:
@@ -371,25 +376,16 @@ def save_machine_setting(
     setting_name: str,
     setting_value: str,
 ) -> int:
-    with connect() as connection:
-        connection.execute(
-            """
-            INSERT INTO machine_adjustments(machine_id, setting_name, setting_value)
-            VALUES (?, ?, ?)
-            ON CONFLICT(machine_id, setting_name)
-            DO UPDATE SET setting_value = excluded.setting_value
-            """,
-            (machine_id, setting_name.strip(), setting_value.strip()),
-        )
-        row = connection.execute(
-            """
-            SELECT id FROM machine_adjustments
-            WHERE machine_id = ? AND setting_name = ? COLLATE NOCASE
-            """,
-            (machine_id, setting_name.strip()),
-        ).fetchone()
-        connection.commit()
-        return int(row[0])
+    return _execute(
+        """
+        INSERT INTO machine_adjustments(machine_id, setting_name, setting_value)
+        VALUES (?, ?, ?)
+        ON CONFLICT(machine_id, setting_name)
+        DO UPDATE SET setting_value = excluded.setting_value
+        RETURNING id
+        """,
+        (machine_id, setting_name.strip(), setting_value.strip()),
+    )
 
 
 def delete_machine_setting(setting_id: int) -> None:
@@ -423,16 +419,18 @@ def get_session(session_id: int) -> dict[str, Any] | None:
 def list_sessions(limit: int = 20) -> list[dict[str, Any]]:
     return _rows(
         """
+        WITH recent AS (
+            SELECT * FROM workout_sessions ORDER BY started_at DESC LIMIT ?
+        )
         SELECT ws.id, ws.started_at, ws.finished_at,
                g.name AS gym_name, wt.name AS template_name,
                COUNT(wset.id) AS recorded_sets
-        FROM workout_sessions AS ws
+        FROM recent AS ws
         JOIN gyms AS g ON g.id = ws.gym_id
         JOIN workout_templates AS wt ON wt.id = ws.template_id
         LEFT JOIN workout_sets AS wset ON wset.session_id = ws.id
         GROUP BY ws.id
         ORDER BY ws.started_at DESC
-        LIMIT ?
         """,
         (limit,),
     )
@@ -576,6 +574,7 @@ def save_exercise_sets(
     machine_id: int | None = None,
 ) -> None:
     with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         if machine_id is not None:
             valid_machine = connection.execute(
                 """
@@ -602,16 +601,17 @@ def save_exercise_sets(
             "DELETE FROM workout_sets WHERE session_id = ? AND exercise_id = ?",
             (session_id, exercise_id),
         )
-        connection.executemany(
-            """
-            INSERT INTO workout_sets(session_id, exercise_id, set_number, weight, reps)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [
-                (session_id, exercise_id, set_number, weight, reps)
-                for set_number, weight, reps in sets
-            ],
-        )
+        # Usually one INSERT, rather than a remote request for every set.
+        # Bound chunk sizes also support unusually large templates safely.
+        for offset in range(0, len(sets), 100):
+            batch = sets[offset:offset + 100]
+            placeholders = ", ".join("(?, ?, ?, ?, ?)" for _ in batch)
+            parameters = [value for number, weight, reps in batch
+                          for value in (session_id, exercise_id, number, weight, reps)]
+            connection.execute(
+                "INSERT INTO workout_sets(session_id, exercise_id, set_number, weight, reps) "
+                f"VALUES {placeholders}", parameters,
+            )
         connection.commit()
 
 
@@ -620,3 +620,121 @@ def finish_session(session_id: int, notes: str = "") -> None:
         "UPDATE workout_sessions SET finished_at = ?, notes = ? WHERE id = ?",
         (datetime.now().astimezone().isoformat(timespec="seconds"), notes.strip(), session_id),
     )
+
+
+def load_catalog(include_items: bool = False) -> dict[str, Any]:
+    """One remote read for page selectors, with template items only when needed."""
+    item_query = """
+        SELECT json_group_array(json_object(
+            'id', id, 'template_id', template_id, 'exercise_id', exercise_id,
+            'position', position, 'target_sets', target_sets,
+            'target_reps', target_reps, 'exercise_name', exercise_name))
+        FROM (SELECT te.*, e.name AS exercise_name FROM template_exercises te
+              JOIN exercises e ON e.id = te.exercise_id ORDER BY te.template_id, te.position)
+    """ if include_items else "SELECT '[]'"
+    row = _rows(f"""
+        SELECT
+          (SELECT json_group_array(json_object('id', id, 'name', name, 'notes', notes))
+           FROM (SELECT * FROM gyms ORDER BY name COLLATE NOCASE)) AS gyms,
+          (SELECT json_group_array(json_object('id', id, 'name', name,
+                    'notes', notes, 'muscle_group', muscle_group))
+           FROM (SELECT * FROM exercises ORDER BY name COLLATE NOCASE)) AS exercises,
+          (SELECT json_group_array(json_object('id', id, 'name', name, 'notes', notes))
+           FROM (SELECT * FROM workout_templates ORDER BY name COLLATE NOCASE)) AS templates,
+          ({item_query}) AS items
+    """)[0]
+    data = {key: json.loads(value) for key, value in row.items()}
+    data["items_by_template"] = {}
+    for item in data.pop("items"):
+        data["items_by_template"].setdefault(item["template_id"], []).append(item)
+    return data
+
+
+def load_workout(session_id: int, exercise_id: int | None = None) -> dict[str, Any]:
+    """Three read queries on one connection, regardless of exercise count.
+
+    Read a fresh snapshot on every page load (or machine change), not a global
+    cache. History includes only the latest session per exercise/machine pair.
+    """
+    with connect() as connection:
+        sessions = _query_rows(connection, """
+            SELECT ws.*, g.name AS gym_name, wt.name AS template_name
+            FROM workout_sessions ws
+            JOIN gyms g ON g.id = ws.gym_id
+            JOIN workout_templates wt ON wt.id = ws.template_id
+            WHERE ws.id = ?
+        """, (session_id,))
+        if not sessions:
+            return {"session": None, "items": []}
+        session = sessions[0]
+        items = _query_rows(connection, """
+            SELECT te.*, e.name AS exercise_name,
+              (SELECT machine_id FROM session_exercise_machines
+               WHERE session_id = ? AND exercise_id = te.exercise_id) AS selected_machine_id,
+              (SELECT json_group_array(json_object(
+                  'set_number', set_number, 'weight', weight, 'reps', reps))
+               FROM (SELECT * FROM workout_sets
+                     WHERE session_id = ? AND exercise_id = te.exercise_id
+                     ORDER BY set_number)) AS current_sets,
+              (SELECT json_group_array(json_object('id', m.id, 'name', m.name,
+                  'settings', json((SELECT json_group_array(json_object(
+                      'setting_name', setting_name, 'setting_value', setting_value))
+                    FROM (SELECT * FROM machine_adjustments WHERE machine_id = m.id
+                          ORDER BY setting_name COLLATE NOCASE)))))
+               FROM (SELECT * FROM machines WHERE gym_id = ? AND exercise_id = te.exercise_id
+                     ORDER BY name COLLATE NOCASE) m) AS machines
+            FROM template_exercises te JOIN exercises e ON e.id = te.exercise_id
+            WHERE te.template_id = ? AND (? IS NULL OR te.exercise_id = ?)
+            ORDER BY te.position
+        """, (session_id, session_id, session["gym_id"], session["template_id"], exercise_id, exercise_id))
+        history_rows = _query_rows(connection, """
+            WITH candidates AS (
+                SELECT DISTINCT ws.id, ws.started_at, w.exercise_id, sem.machine_id
+                FROM workout_sessions ws
+                JOIN workout_sets w ON w.session_id = ws.id
+                JOIN template_exercises te ON te.exercise_id = w.exercise_id AND te.template_id = ?
+                LEFT JOIN session_exercise_machines sem
+                  ON sem.session_id = ws.id AND sem.exercise_id = w.exercise_id
+                WHERE ws.gym_id = ? AND ws.id != ? AND (? IS NULL OR w.exercise_id = ?)
+            ), ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY exercise_id, machine_id ORDER BY started_at DESC, id DESC
+                ) AS rank FROM candidates
+            )
+            SELECT r.id AS session_id, r.started_at, r.exercise_id, r.machine_id,
+                   w.set_number, w.weight, w.reps
+            FROM ranked r JOIN workout_sets w
+              ON w.session_id = r.id AND w.exercise_id = r.exercise_id
+            WHERE r.rank = 1
+            ORDER BY r.started_at DESC, r.id DESC, w.set_number
+        """, (session["template_id"], session["gym_id"], session_id, exercise_id, exercise_id))
+
+    histories: dict[int, dict[int | None, dict[str, Any]]] = {}
+    for row in history_rows:
+        history = histories.setdefault(row["exercise_id"], {})
+        entry = history.setdefault(row["machine_id"], {
+            "session": {"id": row["session_id"], "started_at": row["started_at"]}, "sets": [],
+        })
+        entry["sets"].append({key: row[key] for key in ("set_number", "weight", "reps")})
+    for item in items:
+        item["machines"] = json.loads(item["machines"])
+        item["current_sets"] = json.loads(item["current_sets"])
+        item["history"] = histories.get(item["exercise_id"], {})
+        machine_ids = [machine["id"] for machine in item["machines"]]
+        if item["selected_machine_id"] is None:
+            item["selected_machine_id"] = next(
+                (mid for mid in item["history"] if mid is not None and mid in machine_ids), None,
+            )
+        if item["selected_machine_id"] not in machine_ids:
+            item["selected_machine_id"] = machine_ids[0] if machine_ids else None
+    return {"session": session, "items": items}
+
+
+def workout_previous_sets(item: dict, machine_id: int | None) -> tuple[dict | None, list[dict]]:
+    history = item["history"]
+    if machine_id is None:
+        entry = next(iter(history.values()), None)
+    else:
+        # Preserve the original fallback to pre-machine-tracking history.
+        entry = history.get(machine_id) or history.get(None)
+    return (entry["session"], entry["sets"]) if entry else (None, [])

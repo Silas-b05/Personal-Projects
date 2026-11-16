@@ -53,6 +53,21 @@ restored after a reload. Set drafts are separated by session, exercise and machi
 Successful saves clear only the acknowledged draft, preserving newer edits made
 while a save was in progress. Clearing browser data also clears device drafts.
 
+## Performance and verification
+
+Page reads and database actions run outside NiceGUI's UI event loop. Pages show a
+loading indicator while data arrives. Workout loading uses three read queries on
+one short-lived connection instead of separate network reads for every exercise;
+template selectors and exercise lists are loaded together. No persistent data
+cache or local database replica is used, so a new page load reads Turso directly.
+Set inserts are batched within a transaction, and connections are explicitly closed.
+The only schema addition for this optimization is a non-destructive lookup index.
+
+Run regression tests from this directory with `python -m unittest discover -s tests -v`.
+`python tests/benchmark_loading.py` compares read counts and simulates 20 ms latency
+per query using an isolated database. It does not access Turso or measure production
+network speed. Render cold starts and Render-to-Turso network latency still apply.
+
 ## Project structure
 
 ```text

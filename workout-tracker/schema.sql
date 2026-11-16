@@ -98,5 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_sets_exercise_session
 CREATE INDEX IF NOT EXISTS idx_machines_gym_exercise
     ON machines(gym_id, exercise_id);
 
+CREATE INDEX IF NOT EXISTS idx_sessions_gym_started
+    ON workout_sessions(gym_id, started_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_session_exercise_machine
     ON session_exercise_machines(machine_id, exercise_id, session_id);

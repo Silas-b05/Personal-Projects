@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sqlite3
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Callable
 
@@ -463,13 +465,52 @@ def options(rows: list[dict], label_key: str = "name") -> dict[int, str]:
     return {row["id"]: row[label_key] for row in rows}
 
 
+async def load_page_data(loader: Callable, *args):
+    """Send the page shell first; remote reads must not block UI connections."""
+    with ui.row().classes("items-center gap-2") as loading:
+        ui.spinner(size="sm")
+        ui.label("Loading…").props("role=status")
+    try:
+        await ui.context.client.connected()
+        return await run.io_bound(loader, *args)
+    except Exception:
+        logging.exception("Page data could not be loaded")
+        ui.label("Could not load data. Your saved data has not been changed.").classes("text-negative")
+        ui.button("Retry", on_click=ui.navigate.reload).props("flat")
+        return None
+    finally:
+        loading.delete()
+
+
+def database_action(handler):
+    """Ignore repeated clicks while an asynchronous database action is pending."""
+    busy = False
+
+    @wraps(handler)
+    async def guarded(*args, **kwargs):
+        nonlocal busy
+        if busy:
+            return
+        busy = True
+        try:
+            return await handler(*args, **kwargs)
+        except Exception:
+            logging.exception("Database action could not be confirmed")
+            ui.notify("Could not confirm the action. Reload and check before retrying.", type="negative")
+        finally:
+            busy = False
+    return guarded
+
+
 @ui.page("/")
-def home_page() -> None:
+async def home_page() -> None:
     navigation()
     with ui.column().classes("page-shell w-full max-w-3xl mx-auto p-6 gap-4"):
         page_title("Train today", "Choose a gym and workout day, then record your sets.")
-        gyms = db.list_gyms()
-        templates = db.list_templates()
+        data = await load_page_data(db.load_catalog)
+        if data is None:
+            return
+        gyms, templates = data["gyms"], data["templates"]
 
         if not gyms or not templates:
             ui.label("Add at least one gym and one workout template before starting.").classes(
@@ -487,19 +528,26 @@ def home_page() -> None:
         gym = ui.select(options(gyms), label="Gym").classes("w-full")
         template = ui.select(options(templates), label="Workout day").classes("w-full")
 
-        def start_workout() -> None:
+        @database_action
+        async def start_workout() -> None:
             if gym.value is None or template.value is None:
                 ui.notify("Select both a gym and a workout day.", type="warning")
                 return
-            session_id = db.create_session(int(gym.value), int(template.value))
-            ui.navigate.to(f"/session/{session_id}")
+            start_button.disable()
+            start_button.props("loading")
+            try:
+                session_id = await run.io_bound(db.create_session, int(gym.value), int(template.value))
+                ui.navigate.to(f"/session/{session_id}")
+            finally:
+                start_button.enable()
+                start_button.props(remove="loading")
 
-        ui.button("Start workout", icon="fitness_center", on_click=start_workout).props(
+        start_button = ui.button("Start workout", icon="fitness_center", on_click=start_workout).props(
             "unelevated"
         ).classes("mobile-full-button")
 
 
-def simple_management_page(
+async def simple_management_page(
     title: str,
     subtitle: str,
     load_rows: Callable[[], list[dict]],
@@ -513,12 +561,13 @@ def simple_management_page(
         name = ui.input("Name").classes("w-full")
         second = ui.input(second_label).classes("w-full")
 
-        def save() -> None:
+        @database_action
+        async def save() -> None:
             if not name.value or not name.value.strip():
                 ui.notify("A name is required.", type="warning")
                 return
             try:
-                add_row(name.value, second.value or "")
+                await run.io_bound(add_row, name.value, second.value or "")
             except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
@@ -527,7 +576,9 @@ def simple_management_page(
 
         ui.button("Add", on_click=save).classes("mobile-full-button")
         ui.separator().classes("my-4")
-        rows = load_rows()
+        rows = await load_page_data(load_rows)
+        if rows is None:
+            return
         if not rows:
             ui.label("Nothing added yet.").classes("text-grey-7")
         for row in rows:
@@ -540,9 +591,10 @@ def simple_management_page(
                             ui.label(detail).classes("text-sm text-grey-7")
                     ui.space()
 
-                    def remove(row_id: int = row["id"]) -> None:
+                    @database_action
+                    async def remove(row_id: int = row["id"]) -> None:
                         try:
-                            delete_row(row_id)
+                            await run.io_bound(delete_row, row_id)
                         except (sqlite3.IntegrityError, ValueError) as error:
                             notify_database_error(error)
                             return
@@ -552,8 +604,8 @@ def simple_management_page(
 
 
 @ui.page("/gyms")
-def gyms_page() -> None:
-    simple_management_page(
+async def gyms_page() -> None:
+    await simple_management_page(
         "Gyms",
         "Add the places where you train.",
         db.list_gyms,
@@ -564,8 +616,8 @@ def gyms_page() -> None:
 
 
 @ui.page("/exercises")
-def exercises_page() -> None:
-    simple_management_page(
+async def exercises_page() -> None:
+    await simple_management_page(
         "Exercises",
         "Create the exercises used by your workout templates.",
         db.list_exercises,
@@ -575,8 +627,7 @@ def exercises_page() -> None:
     )
 
 
-def template_exercise_list(template_id: int) -> None:
-    items = db.list_template_exercises(template_id)
+def template_exercise_list(template_id: int, items: list[dict]) -> None:
     if not items:
         ui.label("No exercises in this template yet.").classes("text-grey-7")
         return
@@ -610,8 +661,9 @@ def template_exercise_list(template_id: int) -> None:
                         "text-grey-7"
                     )
 
-                def remove_item(item_id: int = item["id"]) -> None:
-                    db.remove_template_exercise(item_id)
+                @database_action
+                async def remove_item(item_id: int = item["id"]) -> None:
+                    await run.io_bound(db.remove_template_exercise, item_id)
                     ui.navigate.reload()
 
                 remove_buttons.append(ui.button(icon="close", on_click=remove_item).props(
@@ -660,19 +712,20 @@ def template_exercise_list(template_id: int) -> None:
 
 
 @ui.page("/templates")
-def templates_page() -> None:
+async def templates_page() -> None:
     navigation()
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title("Workout templates", "Create workout days and add exercises in training order.")
         template_name = ui.input("New template name (for example Push A)").classes("w-full")
         template_notes = ui.input("Notes (optional)").classes("w-full")
 
-        def create_template() -> None:
+        @database_action
+        async def create_template() -> None:
             if not template_name.value or not template_name.value.strip():
                 ui.notify("A template name is required.", type="warning")
                 return
             try:
-                db.add_template(template_name.value, template_notes.value or "")
+                await run.io_bound(db.add_template, template_name.value, template_notes.value or "")
             except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
@@ -681,8 +734,10 @@ def templates_page() -> None:
         ui.button("Create template", on_click=create_template).classes("mobile-full-button")
         ui.separator().classes("my-4")
 
-        templates = db.list_templates()
-        exercises = db.list_exercises()
+        data = await load_page_data(db.load_catalog, True)
+        if data is None:
+            return
+        templates, exercises = data["templates"], data["exercises"]
         if not templates:
             ui.label("No templates yet.").classes("text-grey-7")
             return
@@ -693,9 +748,10 @@ def templates_page() -> None:
                     ui.label(template["name"]).classes("text-h6")
                     ui.space()
 
-                    def remove_template(template_id: int = template["id"]) -> None:
+                    @database_action
+                    async def remove_template(template_id: int = template["id"]) -> None:
                         try:
-                            db.delete_template(template_id)
+                            await run.io_bound(db.delete_template, template_id)
                         except (sqlite3.IntegrityError, ValueError) as error:
                             notify_database_error(error)
                             return
@@ -705,7 +761,7 @@ def templates_page() -> None:
                         "flat round color=negative"
                     )
 
-                template_exercise_list(template["id"])
+                template_exercise_list(template["id"], data["items_by_template"].get(template["id"], []))
 
                 if not exercises:
                     ui.label("Add exercises before filling this template.").classes("text-orange-8")
@@ -717,7 +773,8 @@ def templates_page() -> None:
                     target_sets = ui.number("Sets", value=3, min=1, step=1).classes("w-28")
                     target_reps = ui.input("Target reps", value="8-12").classes("w-32")
 
-                def add_item(
+                @database_action
+                async def add_item(
                     template_id: int = template["id"],
                     exercise_select=exercise,
                     sets_input=target_sets,
@@ -727,7 +784,7 @@ def templates_page() -> None:
                         ui.notify("Select an exercise.", type="warning")
                         return
                     try:
-                        db.add_template_exercise(
+                        await run.io_bound(db.add_template_exercise, 
                             template_id,
                             int(exercise_select.value),
                             int(sets_input.value or 1),
@@ -751,8 +808,10 @@ async def settings_page() -> None:
             "Machine settings",
             "Add the available machines for each exercise, then save their adjustments.",
         )
-        gyms = db.list_gyms()
-        exercises = db.list_exercises()
+        data = await load_page_data(db.load_catalog)
+        if data is None:
+            return
+        gyms, exercises = data["gyms"], data["exercises"]
         if not gyms or not exercises:
             ui.label("Add at least one gym and one exercise first.").classes("text-orange-8")
             return
@@ -761,7 +820,8 @@ async def settings_page() -> None:
         exercise = ui.select(options(exercises), label="Exercise").classes("w-full")
         machine_name = ui.input("Machine name (for example Cable station 1)").classes("w-full")
 
-        def create_machine() -> None:
+        @database_action
+        async def create_machine() -> None:
             if gym.value is None or exercise.value is None:
                 ui.notify("Select a gym and exercise.", type="warning")
                 return
@@ -769,7 +829,7 @@ async def settings_page() -> None:
                 ui.notify("A machine name is required.", type="warning")
                 return
             try:
-                db.add_machine(int(gym.value), int(exercise.value), machine_name.value)
+                await run.io_bound(db.add_machine, int(gym.value), int(exercise.value), machine_name.value)
             except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
@@ -855,9 +915,10 @@ def settings_machine_cards(machines: list[dict]) -> None:
                     ).classes("text-sm text-grey-7")
                 ui.space()
 
-                def remove_machine(machine_id: int = machine["id"]) -> None:
+                @database_action
+                async def remove_machine(machine_id: int = machine["id"]) -> None:
                     try:
-                        db.delete_machine(machine_id)
+                        await run.io_bound(db.delete_machine, machine_id)
                     except (sqlite3.IntegrityError, ValueError) as error:
                         notify_database_error(error)
                         return
@@ -878,8 +939,9 @@ def settings_machine_cards(machines: list[dict]) -> None:
                         ).classes("setting-identity")
                         ui.space()
 
-                        def remove_setting(setting_id: int = setting["id"]) -> None:
-                            db.delete_machine_setting(setting_id)
+                        @database_action
+                        async def remove_setting(setting_id: int = setting["id"]) -> None:
+                            await run.io_bound(db.delete_machine_setting, setting_id)
                             ui.navigate.reload()
 
                         ui.button(icon="close", on_click=remove_setting).props(
@@ -894,7 +956,8 @@ def settings_machine_cards(machines: list[dict]) -> None:
                     value=machine["name"],
                 ).classes("flex-1 min-w-48")
 
-                def save_machine_name(
+                @database_action
+                async def save_machine_name(
                     machine_id: int = machine["id"],
                     name_input=updated_machine_name,
                 ) -> None:
@@ -902,7 +965,7 @@ def settings_machine_cards(machines: list[dict]) -> None:
                         ui.notify("A machine name is required.", type="warning")
                         return
                     try:
-                        db.rename_machine(machine_id, name_input.value)
+                        await run.io_bound(db.rename_machine, machine_id, name_input.value)
                     except (sqlite3.IntegrityError, ValueError) as error:
                         notify_database_error(error)
                         return
@@ -918,7 +981,8 @@ def settings_machine_cards(machines: list[dict]) -> None:
                     "flex-1 min-w-40"
                 )
 
-            def save_setting(
+            @database_action
+            async def save_setting(
                 machine_id: int = machine["id"],
                 name_input=setting_name,
                 value_input=setting_value,
@@ -929,7 +993,7 @@ def settings_machine_cards(machines: list[dict]) -> None:
                 if value_input.value is None or not str(value_input.value).strip():
                     ui.notify("A value is required.", type="warning")
                     return
-                db.save_machine_setting(
+                await run.io_bound(db.save_machine_setting, 
                     machine_id,
                     name_input.value,
                     str(value_input.value),
@@ -945,12 +1009,14 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
     session_id = int(session["id"])
     gym_id = int(session["gym_id"])
     exercise_id = int(item["exercise_id"])
-    machines = db.list_machines(gym_id, exercise_id)
+    machines = item["machines"]
     machine_ids = {int(machine["id"]) for machine in machines}
-    selected_machine_id = db.suggested_machine(session_id, gym_id, exercise_id)
+    selected_machine_id = item["selected_machine_id"]
     if selected_machine_id not in machine_ids:
         selected_machine_id = int(machines[0]["id"]) if machines else None
     machine_select = None
+    active_save_button = None
+    changing_machine = False
 
     with ui.card().classes("w-full"):
         ui.label(item["exercise_name"]).classes("text-h6")
@@ -960,12 +1026,14 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
 
         @ui.refreshable
         def machine_details(machine_id: int | None, draft_values: dict) -> None:
+            nonlocal active_save_button
+            saving_sets = False
             scope = f'{session_id}:{exercise_id}:{machine_id}:'
             machine = next(
                 (entry for entry in machines if int(entry["id"]) == machine_id),
                 None,
             )
-            settings = db.list_machine_settings(machine_id) if machine_id is not None else []
+            settings = machine["settings"] if machine is not None else []
             if settings:
                 ui.label("Machine settings").classes("font-medium mt-2")
                 ui.label(
@@ -979,9 +1047,7 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
             else:
                 ui.label("No machine saved for this gym and exercise.").classes("text-grey-6")
 
-            previous_session, old_sets = db.previous_sets(
-                session_id, gym_id, exercise_id, machine_id
-            )
+            previous_session, old_sets = db.workout_previous_sets(item, machine_id)
             if previous_session:
                 previous_date = datetime.fromisoformat(previous_session["started_at"]).strftime(
                     "%Y-%m-%d"
@@ -1000,7 +1066,7 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
             else:
                 ui.label("No previous sets recorded at this gym.").classes("text-grey-6")
 
-            current_sets = db.list_session_sets(session_id, exercise_id)
+            current_sets = item["current_sets"]
             set_inputs: list[tuple] = []
             for set_number in range(1, item["target_sets"] + 1):
                 saved = next(
@@ -1036,6 +1102,10 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
                     set_inputs.append((set_number, weight, reps))
 
             async def save_sets(inputs: list[tuple] = set_inputs) -> None:
+                nonlocal saving_sets
+                if saving_sets or changing_machine:
+                    return
+                saving_sets = True
                 save_button.disable()
                 if machine_select is not None:
                     machine_select.disable()
@@ -1045,6 +1115,7 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
                     ui.notify('Could not confirm save. Your device draft is retained; retry when connected.',
                               type='negative')
                 finally:
+                    saving_sets = False
                     save_button.enable()
                     if machine_select is not None:
                         machine_select.enable()
@@ -1078,14 +1149,32 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
             save_button = ui.button("Save sets", icon="save", on_click=save_sets).props("flat").classes(
                 "save-sets-button"
             )
+            active_save_button = save_button
 
         async def choose_machine(event) -> None:
-            if event.value is None:
+            nonlocal changing_machine
+            if event.value is None or changing_machine or event.value == item["selected_machine_id"]:
                 return
+            changing_machine = True
             machine_id = int(event.value)
-            latest_drafts = await recovery.read_drafts(f'{session_id}:')
-            await run.io_bound(db.set_session_machine, session_id, exercise_id, machine_id)
-            machine_details.refresh(machine_id, latest_drafts)
+            machine_select.disable()
+            if active_save_button is not None:
+                active_save_button.disable()
+            try:
+                latest_drafts = await recovery.read_drafts(f'{session_id}:')
+                await run.io_bound(db.set_session_machine, session_id, exercise_id, machine_id)
+                fresh = await run.io_bound(db.load_workout, session_id, exercise_id)
+                if not fresh["items"]:
+                    raise ValueError("This template changed; reload the workout.")
+                item.update(fresh["items"][0])
+                machines[:] = item["machines"]
+                machine_select.set_value(machine_id)
+                machine_details.refresh(machine_id, latest_drafts)
+            except Exception:
+                ui.notify("Could not confirm machine change. Reload to check; device drafts are retained.", type="negative")
+                return
+            changing_machine = False
+            machine_select.enable()
 
         if len(machines) > 1:
             machine_select = ui.select(
@@ -1104,8 +1193,11 @@ def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
 async def session_page(session_id: int) -> None:
     navigation()
     await ui.context.client.connected()
+    data = await load_page_data(db.load_workout, session_id)
+    if data is None:
+        return
     drafts = await recovery.read_drafts(f'{session_id}:')
-    session = db.get_session(session_id)
+    session = data["session"]
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         if session is None:
             page_title("Workout not found")
@@ -1116,7 +1208,7 @@ async def session_page(session_id: int) -> None:
             session["template_name"],
             f'{session["gym_name"]} · started {session["started_at"].replace("T", " ")}',
         )
-        template_items = db.list_template_exercises(session["template_id"])
+        template_items = data["items"]
         if not template_items:
             ui.label("This template has no exercises yet.").classes("text-orange-8")
 
@@ -1130,6 +1222,7 @@ async def session_page(session_id: int) -> None:
                             value=drafts.get(note_key, {}).get('value', session['notes'])).classes("w-full")
         recovery.remember(notes, note_key)
 
+        @database_action
         async def complete_workout() -> None:
             pending = await recovery.read_drafts(f'{session_id}:')
             await run.io_bound(db.finish_session, session_id,
@@ -1144,11 +1237,13 @@ async def session_page(session_id: int) -> None:
 
 
 @ui.page("/history")
-def history_page() -> None:
+async def history_page() -> None:
     navigation()
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title("Workout history", "Your 20 most recent sessions.")
-        sessions = db.list_sessions()
+        sessions = await load_page_data(db.list_sessions)
+        if sessions is None:
+            return
         if not sessions:
             ui.label("No workouts recorded yet.").classes("text-grey-7")
         for session in sessions:
