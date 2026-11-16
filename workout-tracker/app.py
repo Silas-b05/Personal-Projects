@@ -655,7 +655,7 @@ def templates_page() -> None:
 
 
 @ui.page("/settings")
-def settings_page() -> None:
+async def settings_page() -> None:
     navigation()
     with ui.column().classes("page-shell w-full max-w-4xl mx-auto p-6"):
         page_title(
@@ -684,109 +684,156 @@ def settings_page() -> None:
             except (sqlite3.IntegrityError, ValueError) as error:
                 notify_database_error(error)
                 return
+            app.storage.user["settings_exercise_filter"] = int(exercise.value)
             ui.navigate.reload()
 
         ui.button("Add machine", icon="add", on_click=create_machine).classes(
             "mobile-full-button"
         )
         ui.separator().classes("my-4")
-        machines = db.list_machines()
-        if not machines:
-            ui.label("No machines added yet.").classes("text-grey-7")
-        for machine in machines:
-            with ui.card().classes("w-full"):
-                with ui.row().classes("management-row w-full items-center"):
-                    with ui.column().classes("gap-0"):
-                        ui.label(machine["name"]).classes("text-h6")
-                        ui.label(
-                            f'{machine["gym_name"]} · {machine["exercise_name"]}'
-                        ).classes("text-sm text-grey-7")
-                    ui.space()
+        ui.label("Find machines").classes("text-h6")
+        saved_filter = app.storage.user.get("settings_exercise_filter")
+        exercise_options = options(exercises)
+        if saved_filter not in exercise_options:
+            saved_filter = None
+        exercise_filter = ui.select(
+            exercise_options,
+            label="Filter machines by exercise",
+            value=saved_filter,
+            with_input=True,
+        ).props("clearable").classes("w-full")
+        machine_list = ui.column().classes("w-full")
+        request_number = 0
 
-                    def remove_machine(machine_id: int = machine["id"]) -> None:
-                        try:
-                            db.delete_machine(machine_id)
-                        except (sqlite3.IntegrityError, ValueError) as error:
-                            notify_database_error(error)
-                            return
-                        ui.navigate.reload()
+        async def load_machines() -> None:
+            nonlocal request_number
+            request_number += 1
+            current_request = request_number
+            selected = exercise_filter.value
+            app.storage.user["settings_exercise_filter"] = selected
+            machine_list.clear()
+            with machine_list:
+                if selected is None:
+                    ui.label("Select an exercise to see its machines.").classes("text-grey-7")
+                    return
+                ui.spinner()
+            try:
+                machines = await run.io_bound(db.machines_for_settings, int(selected))
+            except Exception:
+                if current_request == request_number:
+                    machine_list.clear()
+                    with machine_list:
+                        ui.label("Could not load machines. Please try again.").classes("text-negative")
+                        ui.button("Retry", on_click=load_machines).props("flat")
+                return
+            # A slower earlier request must not overwrite a newer selection.
+            if current_request != request_number:
+                return
+            machine_list.clear()
+            with machine_list:
+                if not machines:
+                    ui.label("No machines saved for this exercise yet.").classes("text-grey-7")
+                settings_machine_cards(machines)
 
-                    ui.button(icon="delete", on_click=remove_machine).props(
-                        "flat round color=negative aria-label='Delete machine'"
-                    )
+        exercise_filter.on_value_change(load_machines)
+        await load_machines()
 
-                settings = db.list_machine_settings(machine["id"])
-                if settings:
-                    for setting in settings:
-                        with ui.row().classes(
-                            "settings-list-row w-full items-center border-b border-grey-3 py-2"
-                        ):
-                            ui.label(
-                                f'{setting["setting_name"]}: {setting["setting_value"]}'
-                            ).classes("setting-identity")
-                            ui.space()
 
-                            def remove_setting(setting_id: int = setting["id"]) -> None:
-                                db.delete_machine_setting(setting_id)
-                                ui.navigate.reload()
+def settings_machine_cards(machines: list[dict]) -> None:
+    for machine in machines:
+        with ui.card().classes("w-full"):
+            with ui.row().classes("management-row w-full items-center"):
+                with ui.column().classes("gap-0"):
+                    ui.label(machine["name"]).classes("text-h6")
+                    ui.label(
+                        f'{machine["gym_name"]} · {machine["exercise_name"]}'
+                    ).classes("text-sm text-grey-7")
+                ui.space()
 
-                            ui.button(icon="close", on_click=remove_setting).props(
-                                "flat round dense aria-label='Delete setting'"
-                            )
-                else:
-                    ui.label("No adjustments saved.").classes("text-grey-6")
-
-                with ui.row().classes("template-add-fields w-full items-end"):
-                    updated_machine_name = ui.input(
-                        "Machine name",
-                        value=machine["name"],
-                    ).classes("flex-1 min-w-48")
-
-                    def save_machine_name(
-                        machine_id: int = machine["id"],
-                        name_input=updated_machine_name,
-                    ) -> None:
-                        if not name_input.value or not name_input.value.strip():
-                            ui.notify("A machine name is required.", type="warning")
-                            return
-                        try:
-                            db.rename_machine(machine_id, name_input.value)
-                        except (sqlite3.IntegrityError, ValueError) as error:
-                            notify_database_error(error)
-                            return
-                        ui.navigate.reload()
-
-                    ui.button("Rename", icon="edit", on_click=save_machine_name).props("flat")
-
-                with ui.row().classes("template-add-fields w-full items-end"):
-                    setting_name = ui.input(
-                        "Setting name (for example Seat)"
-                    ).classes("flex-1 min-w-48")
-                    setting_value = ui.input("Value (for example 4)").classes(
-                        "flex-1 min-w-40"
-                    )
-
-                def save_setting(
-                    machine_id: int = machine["id"],
-                    name_input=setting_name,
-                    value_input=setting_value,
-                ) -> None:
-                    if not name_input.value or not name_input.value.strip():
-                        ui.notify("A setting name is required.", type="warning")
+                def remove_machine(machine_id: int = machine["id"]) -> None:
+                    try:
+                        db.delete_machine(machine_id)
+                    except (sqlite3.IntegrityError, ValueError) as error:
+                        notify_database_error(error)
                         return
-                    if value_input.value is None or not str(value_input.value).strip():
-                        ui.notify("A value is required.", type="warning")
-                        return
-                    db.save_machine_setting(
-                        machine_id,
-                        name_input.value,
-                        str(value_input.value),
-                    )
                     ui.navigate.reload()
 
-                ui.button("Save adjustment", icon="save", on_click=save_setting).props(
-                    "flat"
-                ).classes("mobile-full-button")
+                ui.button(icon="delete", on_click=remove_machine).props(
+                    "flat round color=negative aria-label='Delete machine'"
+                )
+
+            settings = machine["settings"]
+            if settings:
+                for setting in settings:
+                    with ui.row().classes(
+                        "settings-list-row w-full items-center border-b border-grey-3 py-2"
+                    ):
+                        ui.label(
+                            f'{setting["setting_name"]}: {setting["setting_value"]}'
+                        ).classes("setting-identity")
+                        ui.space()
+
+                        def remove_setting(setting_id: int = setting["id"]) -> None:
+                            db.delete_machine_setting(setting_id)
+                            ui.navigate.reload()
+
+                        ui.button(icon="close", on_click=remove_setting).props(
+                            "flat round dense aria-label='Delete setting'"
+                        )
+            else:
+                ui.label("No adjustments saved.").classes("text-grey-6")
+
+            with ui.row().classes("template-add-fields w-full items-end"):
+                updated_machine_name = ui.input(
+                    "Machine name",
+                    value=machine["name"],
+                ).classes("flex-1 min-w-48")
+
+                def save_machine_name(
+                    machine_id: int = machine["id"],
+                    name_input=updated_machine_name,
+                ) -> None:
+                    if not name_input.value or not name_input.value.strip():
+                        ui.notify("A machine name is required.", type="warning")
+                        return
+                    try:
+                        db.rename_machine(machine_id, name_input.value)
+                    except (sqlite3.IntegrityError, ValueError) as error:
+                        notify_database_error(error)
+                        return
+                    ui.navigate.reload()
+
+                ui.button("Rename", icon="edit", on_click=save_machine_name).props("flat")
+
+            with ui.row().classes("template-add-fields w-full items-end"):
+                setting_name = ui.input(
+                    "Setting name (for example Seat)"
+                ).classes("flex-1 min-w-48")
+                setting_value = ui.input("Value (for example 4)").classes(
+                    "flex-1 min-w-40"
+                )
+
+            def save_setting(
+                machine_id: int = machine["id"],
+                name_input=setting_name,
+                value_input=setting_value,
+            ) -> None:
+                if not name_input.value or not name_input.value.strip():
+                    ui.notify("A setting name is required.", type="warning")
+                    return
+                if value_input.value is None or not str(value_input.value).strip():
+                    ui.notify("A value is required.", type="warning")
+                    return
+                db.save_machine_setting(
+                    machine_id,
+                    name_input.value,
+                    str(value_input.value),
+                )
+                ui.navigate.reload()
+
+            ui.button("Save adjustment", icon="save", on_click=save_setting).props(
+                "flat"
+            ).classes("mobile-full-button")
 
 
 def workout_exercise_card(session: dict, item: dict, drafts: dict) -> None:
